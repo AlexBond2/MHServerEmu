@@ -8,6 +8,8 @@ using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Serialization;
 using MHServerEmu.Core.System.Time;
 using MHServerEmu.Core.VectorMath;
+using MHServerEmu.Games.Behavior;
+using MHServerEmu.Games.Common;
 using MHServerEmu.Games.DRAG;
 using MHServerEmu.Games.DRAG.Generators.Regions;
 using MHServerEmu.Games.Entities;
@@ -256,7 +258,7 @@ namespace MHServerEmu.Games.Regions
 
             GlobalsPrototype globals = GameDatabase.GlobalsPrototype;
             if (globals == null)
-                return Logger.ErrorReturn(false, "Unable to get globals prototype for region initialize");
+                return Logger.ErrorReturn(false, "Initialize(): Unable to get globals prototype for region initialize");
 
             TuningTable = new(this);
 
@@ -266,7 +268,7 @@ namespace MHServerEmu.Games.Regions
                 TuningTable.SetTuningTable(difficultySettings.TuningTable);
 
                 if (Properties.HasProperty(PropertyEnum.DifficultyIndex))
-                       TuningTable.SetDifficultyIndex(Properties[PropertyEnum.DifficultyIndex], false);                
+                    TuningTable.SetDifficultyIndex(Properties[PropertyEnum.DifficultyIndex], false);
             }
 
             // NOTE: Divided start locations are used only in the Age of Ultron game mode
@@ -277,7 +279,7 @@ namespace MHServerEmu.Games.Regions
             if (Aabb.IsZero() == false)
             {
                 if (settings.GenerateAreas)
-                    Logger.Warn("Bound is not Zero with GenerateAreas On");             
+                    Logger.Warn("Initialize(): Bound is not Zero with GenerateAreas On");             
                 
                 InitializeSpacialPartition(Aabb);
                 NaviMesh.Initialize(Aabb, 1000.0f, this);
@@ -903,9 +905,9 @@ namespace MHServerEmu.Games.Regions
 
         public bool CheckMarkerFilter(PrototypeId filterRef)
         {
-            if (filterRef == 0) return true;
+            if (filterRef == PrototypeId.Invalid) return true;
             PrototypeId markerFilter = Prototype.MarkerFilter;
-            if (markerFilter == 0) return true;
+            if (markerFilter == PrototypeId.Invalid) return true;
             return markerFilter == filterRef;
         }
 
@@ -1198,7 +1200,8 @@ namespace MHServerEmu.Games.Regions
             int maxSweepHeight = 0)
         {
             resultPosition = Vector3.Zero;
-            if (maxDistanceFromPoint < minDistanceFromPoint) return false;
+            if (maxDistanceFromPoint < minDistanceFromPoint)
+                Logger.Warn("ChooseRandomPositionNearPoint(): maxDistanceFromPoint < minDistanceFromPoint");
 
             if (posFlags.HasFlag(PositionCheckFlags.CanPathTo) && posFlags.HasFlag(PositionCheckFlags.CanSweepTo))
             {
@@ -1624,6 +1627,42 @@ namespace MHServerEmu.Games.Regions
 
             PlayerDeathRecordedEvent.Invoke(new(player));
         }
+
+        public PrototypeId GetStartTarget(Player player)
+        {
+            PrototypeId startTargetRef = Properties[PropertyEnum.RegionStartTargetOverride];
+            if (startTargetRef == PrototypeId.Invalid)
+            {
+                if (GetDividedStartTarget(player, ref startTargetRef) == false)
+                    startTargetRef = Prototype.StartTarget;
+            }
+            return startTargetRef;
+        }
+
+        private bool GetDividedStartTarget(Player player, ref PrototypeId startTargetRef)
+        {
+            if (DividedStartLocations.Count == 0) return false;
+
+            foreach (var startLocation in DividedStartLocations)
+                if (startLocation.UpdatePlayers(player, Game))
+                {
+                    startTargetRef = startLocation.Location.Target;
+                    return true;
+                }
+
+            Picker<DividedStartLocation> picker = new(Game.Random);
+            foreach (var startLocation in DividedStartLocations)
+                if (startLocation.Weight > 0) picker.Add(startLocation, startLocation.Weight);
+
+            if (picker.Pick(out var pickLocation))
+            {
+                pickLocation.AddPlayer(player);
+                startTargetRef = pickLocation.Location.Target;
+                return true;
+            }
+
+            return false;
+        }
     }
 
     public class RandomPositionPredicate    // TODO: Change to interface / struct
@@ -1639,10 +1678,35 @@ namespace MHServerEmu.Games.Regions
     public class DividedStartLocation
     {
         public DividedStartLocationPrototype Location { get; }
+        public int Weight { get => Location.Players - _players.Count; }
+
+        private readonly List<ulong> _players;
 
         public DividedStartLocation(DividedStartLocationPrototype location)
         {
             Location = location;
+            _players = new();
+        }
+
+        public void AddPlayer(Player player)
+        {
+            _players.Add(player.DatabaseUniqueId);
+        }
+
+        public bool UpdatePlayers(Player player, Game game)
+        {
+            if (player == null) return false;
+            var manager = game.EntityManager;
+            if (manager == null) return false;
+
+            foreach(ulong playerGUID in _players.ToArray())
+            {
+                if (playerGUID == player.DatabaseUniqueId) return true;
+                var existplayer = manager.GetEntityByDbGuid<Player>(playerGUID);
+                if (existplayer == null) _players.Remove(playerGUID);
+            }
+
+            return false;
         }
     }
 }

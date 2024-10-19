@@ -213,7 +213,7 @@ namespace MHServerEmu.Games.Behavior
                 }
 
                 eventScheduler.ScheduleEvent(_thinkEvent, nextThinkTimeOffset, _pendingEvents);
-                _thinkEvent.Get().OwnerController = this;
+                _thinkEvent.Get().Initialize(this);
             }
         }
 
@@ -326,12 +326,23 @@ namespace MHServerEmu.Games.Behavior
                 Brain.ThinkCountPerFrame = 0;
             }
             bool thinking = true;
+
             if (Owner.TestStatus(EntityStatus.PendingDestroy) == false 
                 && Owner.TestStatus(EntityStatus.Destroyed) == false && thinking)
             {
-                float thinkTime = 500; // slow think 
-                if (TargetEntity != null || AssistedEntity != null)
-                    thinkTime = 100; // fast think
+                float thinkTime;
+                int aiCustomThinkRateMS = Blackboard.AICustomThinkRateMS;
+                if (aiCustomThinkRateMS <= 0)
+                {
+                    thinkTime = TargetEntity != null || AssistedEntity != null
+                        ? 100.0f    // slow think
+                        : 500.0f;   // fast think
+                }
+                else
+                {
+                    thinkTime = aiCustomThinkRateMS;
+                }
+
                 ScheduleAIThinkEvent(TimeSpan.FromMilliseconds(thinkTime) * Game.Random.NextFloat(0.9f, 1.1f));
             }
 
@@ -444,7 +455,11 @@ namespace MHServerEmu.Games.Behavior
 
         public void OnAISetSimulated(bool simulated)
         {
-            SetIsEnabled(simulated);
+            if (simulated)
+                ScheduleAIThinkEvent(TimeSpan.FromMilliseconds(1), true);
+            else
+                ClearScheduledThinkEvent();
+
             Brain?.OnSetSimulated(simulated);
         }
 
@@ -588,7 +603,7 @@ namespace MHServerEmu.Games.Behavior
             }
         }
 
-        private void ScheduleAIEvent<TEvent>(EventPointer<TEvent> eventPointer, TimeSpan timeOffset)
+        public void ScheduleAIEvent<TEvent>(EventPointer<TEvent> eventPointer, TimeSpan timeOffset)
             where TEvent : CallMethodEvent<AIController>, new()
         {
             var scheduler = Game?.GameEventScheduler;
@@ -616,15 +631,14 @@ namespace MHServerEmu.Games.Behavior
             protected override CallbackDelegate GetCallback() => (controller, time) => controller.ThrownObjectPickedUp(time);
         }
 
-        public class AIThinkEvent : ScheduledEvent
+        public class EnableAIEvent : CallMethodEvent<AIController>
         {
-            public AIController OwnerController;
+            protected override CallbackDelegate GetCallback() => (controller) => controller.SetIsEnabled(true);
+        }
 
-            public override bool OnTriggered()
-            {
-                OwnerController?.Think();
-                return true;
-            }
+        public class AIThinkEvent : CallMethodEvent<AIController>
+        {
+            protected override CallbackDelegate GetCallback() => (controller) => controller?.Think();
         }
 
         #endregion

@@ -18,6 +18,7 @@ using MHServerEmu.Games.Events;
 using MHServerEmu.Games.Events.Templates;
 using MHServerEmu.Games.GameData;
 using MHServerEmu.Games.GameData.Prototypes;
+using MHServerEmu.Games.Loot;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Populations;
@@ -73,6 +74,7 @@ namespace MHServerEmu.Games.Entities
         private static readonly Logger Logger = LogManager.CreateLogger();
 
         private readonly EventPointer<ScheduledExitWorldEvent> _exitWorldEvent = new();
+        private readonly EventPointer<ScheduledKillEvent> _scheduledKillEvent = new();
 
         private AlliancePrototype _allianceProto;
         private Transform3 _transform = Transform3.Identity();
@@ -337,11 +339,6 @@ namespace MHServerEmu.Games.Entities
 
             Properties[PropertyEnum.Health] = 0;
             OnKilled(killer, killFlags, directKiller);   
-        }
-
-        public void CancelKillEvent()
-        {
-            // TODO
         }
 
         public override void Destroy()
@@ -1780,7 +1777,7 @@ namespace MHServerEmu.Games.Entities
             // Undiscover from players
             if (InterestReferences.IsAnyPlayerInterested(AOINetworkPolicyValues.AOIChannelDiscovery))
             {
-                foreach (ulong playerId in InterestReferences.PlayerIds)
+                foreach (ulong playerId in InterestReferences)
                 {
                     Player player = Game.EntityManager.GetEntity<Player>(playerId);
 
@@ -2070,25 +2067,52 @@ namespace MHServerEmu.Games.Entities
 
         #region Rewards
 
-        public void GiveKillRewards(WorldEntity killer, KillFlags killFlags, WorldEntity directKiller)
+        public bool GetXPAwarded(out long xp, out long minXP, bool applyGlobalTuning)
         {
+            return WorldEntityPrototype.GetXPAwarded(CharacterLevel, out xp, out minXP, applyGlobalTuning);
+        }
+
+        public bool GiveKillRewards(WorldEntity killer, KillFlags killFlags, WorldEntity directKiller)
+        {
+            Region region = Region;
+            if (region == null) return Logger.WarnReturn(false, "GiveKillRewards(): region == null");
+
+            TuningTable tuningTable = region.TuningTable;
+            if (tuningTable == null) return Logger.WarnReturn(false, "GiveKillRewards(): tuningTable == null");
+
             // TODO: Track kill participation somehow to prevent exploits
-            foreach (ulong playerId in InterestReferences.PlayerIds)
+            foreach (ulong playerId in InterestReferences)
             {
                 Player player = Game.EntityManager.GetEntity<Player>(playerId);
                 if (player == null) continue;
 
                 // Loot
-                Game.LootManager.DropRandomLoot(this, player);
+                if (killFlags.HasFlag(KillFlags.NoLoot) == false && Properties[PropertyEnum.NoLootDrop] == false)
+                {
+                    // TODO: Other loot drop event / action types?
+                    RankPrototype rankProto = GetRankPrototype();
+                    LootDropEventType lootDropEventType = rankProto.LootTableParam != LootDropEventType.None
+                        ? rankProto.LootTableParam
+                        : LootDropEventType.OnKilled;
+
+                    PrototypeId lootTableProtoRef = Properties[PropertyEnum.LootTablePrototype, (PropertyParam)lootDropEventType, 0, (PropertyParam)LootActionType.Spawn];
+
+                    if (lootTableProtoRef != PrototypeId.Invalid)
+                        Game.LootManager.SpawnLootFromTable(lootTableProtoRef, player, this);
+                }
 
                 // XP
-                if (killer is not Avatar avatar)
-                    continue;
-
-                WorldEntityPrototype.GetXPAwarded(killer.CharacterLevel, out long xp, out long minXP, true);
-                xp *= 3;    // REMOVEME: Triple experience gains to compensate for the lack of experience orbs and boosts
-                avatar.AwardXP(xp, Properties[PropertyEnum.ShowXPRewardText]);
+                if (killer is Avatar avatar && killFlags.HasFlag(KillFlags.NoExp) == false && Properties[PropertyEnum.NoExpOnDeath] == false)
+                {
+                    if (WorldEntityPrototype.GetXPAwarded(killer.CharacterLevel, out long xp, out long minXP, true))
+                    {
+                        xp = avatar.ApplyXPModifiers(xp, tuningTable);
+                        avatar.AwardXP(xp, Properties[PropertyEnum.ShowXPRewardText]);
+                    }
+                }
             }
+
+            return true;
         }
 
         #endregion
@@ -2493,11 +2517,52 @@ namespace MHServerEmu.Games.Entities
 
         public void OnInteractedWith(WorldEntity other)
         {
+            int usesLeft = Properties[PropertyEnum.InteractableUsesLeft];
+            bool used = usesLeft == -1 || usesLeft > 0;
+
+            if (usesLeft != -1)
+            {
+                usesLeft--;
+                Properties[PropertyEnum.InteractableUsesLeft] = usesLeft;
+            }
+
+            bool lastUsed = used && usesLeft == 0;
+
+            // TODO InteractableSpawnLootDelayMS
+
+            if (lastUsed)
+            {
+                long destroyDelayMS = Properties[PropertyEnum.InteractableDestroyDelayMS];
+                if (destroyDelayMS > 0)
+                    ScheduleKillEvent(TimeSpan.FromMilliseconds(destroyDelayMS));
+            }
+
             if (WorldEntityPrototype.PostInteractState != null)
                 ApplyStateFromPrototype(WorldEntityPrototype.PostInteractState);
         }
 
         #region Scheduled Events
+
+        public bool ScheduleKillEvent(TimeSpan delay)
+        {
+            if (TestStatus(EntityStatus.PendingDestroy))
+                return Logger.WarnReturn(false, $"ScheduleKillEvent(): WorldEntity {this} is already pending destroy");
+
+            if (TestStatus(EntityStatus.Destroyed))
+                return Logger.WarnReturn(false, $"ScheduleKillEvent(): WorldEntity {this} is already destroyed");
+
+            if (IsDead)
+                return Logger.WarnReturn(false, $"ScheduleKillEvent(): WorldEntity {this} is dead");
+
+            if (_scheduledKillEvent.IsValid)
+            {
+                if (_scheduledKillEvent.Get().FireTime > (Game.CurrentTime + delay))
+                    Game?.GameEventScheduler?.RescheduleEvent(_scheduledKillEvent, delay);
+            }
+            else ScheduleEntityEvent(_scheduledKillEvent, delay);
+
+            return true;
+        }
 
         public override bool ScheduleDestroyEvent(TimeSpan delay)
         {
@@ -2524,9 +2589,20 @@ namespace MHServerEmu.Games.Entities
                 Game?.GameEventScheduler?.CancelEvent(_exitWorldEvent);
         }
 
+        public void CancelKillEvent()
+        {
+            if (_scheduledKillEvent.IsValid)
+                Game?.GameEventScheduler?.CancelEvent(_scheduledKillEvent);
+        }
+
         protected class ScheduledExitWorldEvent : CallMethodEvent<Entity>
         {
             protected override CallbackDelegate GetCallback() => (t) => (t as WorldEntity)?.ExitWorld();
+        }
+
+        protected class ScheduledKillEvent : CallMethodEvent<Entity>
+        {
+            protected override CallbackDelegate GetCallback() => (t) => (t as WorldEntity)?.Kill();
         }
 
         #endregion
