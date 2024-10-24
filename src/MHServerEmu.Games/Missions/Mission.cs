@@ -1984,8 +1984,9 @@ namespace MHServerEmu.Games.Missions
                 }
                 else
                 {
-                    // check this
-                    lootManager.SpawnLootFromTable(reward, player, avatar); 
+                    using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                    inputSettings.Initialize(LootContext.Drop, player, avatar);
+                    lootManager.SpawnLootFromTable(reward, inputSettings);
                 }
             }
         }
@@ -1995,21 +1996,33 @@ namespace MHServerEmu.Games.Missions
             var lootManager = Game.LootManager;
             var missionProto = Prototype;
 
-            // TODO Rework this!!!
-            var lootType = lootSummary.Types;
-
             // Test for Item only
-            if (lootType.HasFlag(LootType.Item))
+            if (lootSummary.HasAnyResult)
             {
                 if (missionProto.DropLootOnGround || lootDropper != null)
                 {
                     lootDropper ??= player.CurrentAvatar;
-                    lootManager.SpawnLootFromSummary(lootSummary, player, lootDropper);
+                    using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                    inputSettings.Initialize(LootContext.Drop, player, lootDropper);
+                    lootManager.SpawnLootFromSummary(lootSummary, inputSettings);
                 }
                 else
                 {
                     // TODO give all loot
-                    lootManager.GiveItem(lootSummary.ItemSpecs[0].ItemProtoRef, player);
+                    foreach (var itemSpec in lootSummary.ItemSpecs)
+                        lootManager.GiveItem(itemSpec.ItemProtoRef, player);
+
+                    var avatar = player.CurrentAvatar;
+                    if (lootSummary.Experience > 0)
+                        avatar.AwardXP(lootSummary.Experience, false);
+
+                    if (lootSummary.Credits.Count > 0)
+                    {
+                        int credits = 0;
+                        foreach (int amount in lootSummary.Credits)
+                            credits += amount;
+                        player.Properties.AdjustProperty(credits, new(PropertyEnum.Currency, GameDatabase.CurrencyGlobalsPrototype.Credits));
+                    }
                 }
             }
             return true;

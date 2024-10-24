@@ -114,6 +114,7 @@ namespace MHServerEmu.Games.Entities
         public bool IsFullscreenMoviePlaying { get => Properties[PropertyEnum.FullScreenMoviePlaying]; }
         public bool IsOnLoadingScreen { get; private set; }
         public bool IsFullscreenObscured { get => IsFullscreenMoviePlaying || IsOnLoadingScreen; }
+
         // Network
         public PlayerConnection PlayerConnection { get; private set; }
         public AreaOfInterest AOI { get => PlayerConnection.AOI; }
@@ -132,7 +133,6 @@ namespace MHServerEmu.Games.Entities
         public Avatar SecondaryAvatar { get; private set; }
         public int CurrentAvatarCharacterLevel { get => PrimaryAvatar?.CharacterLevel ?? 0; }
         public GuildMembership GuildMembership { get; internal set; }
-        public string Name { get; internal set; }
         public PrototypeId ActiveChapter { get => Properties[PropertyEnum.ActiveMissionChapter]; }
         public PrototypeId Faction { get => Properties[PropertyEnum.Faction]; }
         public ulong DialogTargetId { get; private set; }
@@ -855,6 +855,7 @@ namespace MHServerEmu.Games.Entities
         /// Returns <see langword="true"/> if this <see cref="Player"/> has the specified badge.
         /// </summary>
         public bool HasBadge(AvailableBadges badge) => _badges.Contains(badge);
+
         public void AddTag(WorldEntity entity) => _tagEntities.Add(entity.Id);
         public void RemoveTag(WorldEntity entity) => _tagEntities.Remove(entity.Id);
 
@@ -898,7 +899,7 @@ namespace MHServerEmu.Games.Entities
 
         public void UnlockTeamUpAgent(PrototypeId teamUpRef)
         {
-            if (IsTeamUpAgentUnlocked(teamUpRef) == false) return;
+            if (IsTeamUpAgentUnlocked(teamUpRef)) return;
 
             var manager = Game?.EntityManager;
             if (manager == null) return;
@@ -923,7 +924,7 @@ namespace MHServerEmu.Games.Entities
 
             SendNewTeamUpAcquired(teamUpRef);
 
-            GetRegion()?.PlayerUnlockedTeamUpEvent.Invoke(new(this, teamUpRef));            
+            GetRegion()?.PlayerUnlockedTeamUpEvent.Invoke(new(this, teamUpRef));
         }
 
         public bool BeginSwitchAvatar(PrototypeId avatarProtoRef)
@@ -1451,10 +1452,10 @@ namespace MHServerEmu.Games.Entities
                 var target = Game.EntityManager.GetEntity<WorldEntity>(targetId);
                 if (ValidateDialogTarget(target, interactorId) == false)
                     return Logger.WarnReturn(false, $"ValidateDialogTarget false for {target.PrototypeName} with {interactor.PrototypeName}");
-
-                DialogTargetId = targetId;
-                DialogInteractorId = interactorId;
             }
+
+            DialogTargetId = targetId;
+            DialogInteractorId = interactorId;
 
             return true;
         }

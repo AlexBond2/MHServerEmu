@@ -19,6 +19,7 @@ using MHServerEmu.Games.Events.Templates;
 using MHServerEmu.Games.GameData;
 using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Loot;
+using MHServerEmu.Games.Missions;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Populations;
@@ -273,11 +274,13 @@ namespace MHServerEmu.Games.Entities
                 GiveKillRewards(killer, killFlags, directKiller);
             }
 
+            var region = Region;
+
             // Trigger EntityDead Event
             if (killFlags.HasFlag(KillFlags.NoDeadEvent) == false && notMissile)
             {
                 var player = killer?.GetOwnerOfType<Player>();
-                Region?.EntityDeadEvent.Invoke(new(this, killer, player));
+                region?.EntityDeadEvent.Invoke(new(this, killer, player));
             }
 
             // Set death state properties
@@ -285,6 +288,8 @@ namespace MHServerEmu.Games.Entities
 
             if (worldEntityProto.RemoveNavInfluenceOnKilled)
                 Properties[PropertyEnum.NoEntityCollide] = true;
+
+            SpawnSpec?.OnDefeat(killer, false);
 
             // Send kill message to clients
             var killMessage = NetMessageEntityKill.CreateBuilder()
@@ -295,6 +300,10 @@ namespace MHServerEmu.Games.Entities
 
             Game.NetworkManager.SendMessageToInterested(killMessage, this, AOINetworkPolicyValues.AOIChannelProximity);
 
+            if (worldEntityProto.PostKilledState != null)
+                ApplyStateFromPrototype(worldEntityProto.PostKilledState);
+
+            region?.UIDataProvider.OnEntityLifecycle(this);
 
             // Schedule destruction
             int removeFromWorldTimerMS = worldEntityProto.RemoveFromWorldTimerMS;
@@ -2098,7 +2107,23 @@ namespace MHServerEmu.Games.Entities
                     PrototypeId lootTableProtoRef = Properties[PropertyEnum.LootTablePrototype, (PropertyParam)lootDropEventType, 0, (PropertyParam)LootActionType.Spawn];
 
                     if (lootTableProtoRef != PrototypeId.Invalid)
-                        Game.LootManager.SpawnLootFromTable(lootTableProtoRef, player, this);
+                    {
+                        using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                        inputSettings.Initialize(LootContext.Drop, player, this);
+                        Game.LootManager.SpawnLootFromTable(lootTableProtoRef, inputSettings);
+                    }
+
+                    // TODO: rework this
+                    List<MissionLootTable> lootList = new();
+                    if (MissionManager.GetDropLootsForEnemy(this, player, lootList))
+                    {
+                        foreach (var missionLoot in lootList)
+                        {
+                            using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                            inputSettings.Initialize(LootContext.Drop, player, this);
+                            Game.LootManager.SpawnLootFromTable(missionLoot.LootTableRef, inputSettings);
+                        }
+                    }
                 }
 
                 // XP
@@ -2184,7 +2209,7 @@ namespace MHServerEmu.Games.Entities
         {
             if (base.ClearState() == false) return false;
 
-            PrototypeId stateRef = Properties[PropertyEnum.EntityState]; 
+            PrototypeId stateRef = Properties[PropertyEnum.EntityState];
             var entityStateProto = GameDatabase.GetPrototype<EntityStatePrototype>(stateRef);
             if (entityStateProto == null) return false;
 
@@ -2212,7 +2237,7 @@ namespace MHServerEmu.Games.Entities
             {
                 var spawner = Game.EntityManager.GetEntity<Spawner>(group.SpawnerId);
                 spawner?.SetTaggedBy(player, null);
-            }            
+            }
         }
 
         public override SimulateResult SetSimulated(bool simulated)
@@ -2271,7 +2296,7 @@ namespace MHServerEmu.Games.Entities
 
         public void EmergencyRegionCleanup(Region region)
         {
-            if(region == Region)
+            if (region == Region)
             {
                 DisableNavigationInfluence();
                 RegionLocation = null;

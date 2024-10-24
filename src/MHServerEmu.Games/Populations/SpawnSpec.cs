@@ -9,6 +9,7 @@ using MHServerEmu.Games.Events;
 using MHServerEmu.Games.Events.Templates;
 using MHServerEmu.Games.GameData;
 using MHServerEmu.Games.GameData.Prototypes;
+using MHServerEmu.Games.Loot;
 using MHServerEmu.Games.Properties;
 using MHServerEmu.Games.Regions;
 
@@ -305,10 +306,11 @@ namespace MHServerEmu.Games.Populations
         public SpawnEvent SpawnEvent { get; set; }
         public SpawnReservation Reservation { get; set; }
         public ulong BlackOutId { get; set; }
-        public List<ulong> Killers { get; }
+        public HashSet<ulong> Killers { get; }
         public bool SpawnCleanup { get; set; }
         public Region Region { get; }
         public SpawnHeat SpawnHeat { get; set; }
+        public bool RegionScored { get; set; }
 
         public SpawnGroup(ulong id, PopulationManager populationManager)
         {
@@ -481,11 +483,21 @@ namespace MHServerEmu.Games.Populations
             Game.GameEventScheduler.CancelEvent(_clearClusterEvent);            
             Region.ClusterEnemiesClearedEvent.Invoke(new(this, killerId));
 
-            if (loot && Killers.Count > 0 && ObjectProto?.OnDefeatLootTable != PrototypeId.Invalid)
+            if (loot && Killers.Count > 0 && ObjectProto != null && ObjectProto.OnDefeatLootTable != PrototypeId.Invalid)
             {
-                var killer = Game.EntityManager.GetEntity<Avatar>(killerId);
-                var entity = Game.EntityManager.GetEntity<WorldEntity>(entityId);
-                // TODO Loot for Killers
+                var entityManager = Game.EntityManager;
+                var entity = entityManager.GetEntity<WorldEntity>(entityId);
+                var lootManager = Game.LootManager;
+
+                foreach (ulong playerId in Killers)
+                {
+                    var killer = entityManager.GetEntity<Player>(playerId);
+                    var positionOverride = _killPosition;
+                    if (positionOverride == Vector3.Zero) positionOverride = Transform.Translation;
+                    using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                    inputSettings.Initialize(LootContext.Drop, killer, entity, positionOverride);
+                    lootManager.SpawnLootFromTable(ObjectProto.OnDefeatLootTable, inputSettings);
+                }
             }
 
             SpawnHeat?.Return();

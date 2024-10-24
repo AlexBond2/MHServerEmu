@@ -8,7 +8,6 @@ using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Serialization;
 using MHServerEmu.Core.System.Time;
 using MHServerEmu.Core.VectorMath;
-using MHServerEmu.Games.Behavior;
 using MHServerEmu.Games.Common;
 using MHServerEmu.Games.DRAG;
 using MHServerEmu.Games.DRAG.Generators.Regions;
@@ -479,7 +478,7 @@ namespace MHServerEmu.Games.Regions
             }
 
             ClearDividedStartLocations();
-            
+
             foreach (var entity in Game.EntityManager.IterateEntities())
                 if (entity is WorldEntity worldEntity)
                     worldEntity.EmergencyRegionCleanup(this);
@@ -487,6 +486,7 @@ namespace MHServerEmu.Games.Regions
             NaviMesh.Release();
             PopulationManager.Deallocate();
             MissionManager.Deallocate();
+            UIDataProvider.Deallocate();
             Properties.Unbind();
         }
 
@@ -1476,7 +1476,7 @@ namespace MHServerEmu.Games.Regions
 
         public void OnLoadingFinished()
         {
-            if (IsFirstLoaded) return;            
+            if (IsFirstLoaded) return;
             IsFirstLoaded = true;
 
             foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.ScoringEventTimerStartTimeMS))                
@@ -1537,7 +1537,7 @@ namespace MHServerEmu.Games.Regions
 
         public bool FilterRegions(PrototypeId[] filterRegions)
         {
-            if (Prototype == null || filterRegions.IsNullOrEmpty()) return false; 
+            if (Prototype == null || filterRegions.IsNullOrEmpty()) return false;
             foreach (var regionRef in filterRegions)
                 if (Prototype.FilterRegion(regionRef, false, null)) return true;
             return false;
@@ -1699,7 +1699,7 @@ namespace MHServerEmu.Games.Regions
             var manager = game.EntityManager;
             if (manager == null) return false;
 
-            foreach(ulong playerGUID in _players.ToArray())
+            foreach (ulong playerGUID in _players.ToArray())
             {
                 if (playerGUID == player.DatabaseUniqueId) return true;
                 var existplayer = manager.GetEntityByDbGuid<Player>(playerGUID);

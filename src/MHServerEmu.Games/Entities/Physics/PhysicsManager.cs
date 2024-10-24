@@ -1,9 +1,7 @@
 ﻿using MHServerEmu.Core.Collisions;
 using MHServerEmu.Core.VectorMath;
-using MHServerEmu.Games.Behavior;
 using MHServerEmu.Games.Common;
 using MHServerEmu.Games.Entities.Locomotion;
-using MHServerEmu.Games.Events;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Regions;
 
@@ -154,8 +152,8 @@ namespace MHServerEmu.Games.Entities.Physics
                         if (worldEntityProto != null)
                         {
                             attachedEntity.ChangeRegionPosition(
-                                parentEntityPosition, 
-                                worldEntityProto.UpdateOrientationWithParent ? parentEntityOrientation : null, 
+                                parentEntityPosition,
+                                worldEntityProto.UpdateOrientationWithParent ? parentEntityOrientation : null,
                                 ChangePositionFlags.PhysicsResolve);
                             CheckForExistingCollisions(attachedEntity, false);
                             physicsContext.AttachedEntities.Add(attachedEntity);

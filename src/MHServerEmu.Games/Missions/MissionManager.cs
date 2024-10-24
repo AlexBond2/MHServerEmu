@@ -31,9 +31,9 @@ namespace MHServerEmu.Games.Missions
         private readonly EventPointer<DailyMissionEvent> _dailyMissionEvent = new();
 
         private PrototypeId _avatarPrototypeRef;
-        private Dictionary<PrototypeId, Mission> _missionDict = new();
-        private SortedDictionary<PrototypeGuid, List<PrototypeGuid>> _legendaryMissionBlacklist = new();
-        private Dictionary<PrototypeId, MissionSpawnEvent> _spawnedMissions = new();
+        private readonly Dictionary<PrototypeId, Mission> _missionDict;
+        private readonly SortedDictionary<PrototypeGuid, List<PrototypeGuid>> _legendaryMissionBlacklist;
+        private readonly Dictionary<PrototypeId, MissionSpawnEvent> _spawnedMissions;
 
         public Player Player { get; private set; }
         public Game Game { get; private set; }
@@ -41,7 +41,7 @@ namespace MHServerEmu.Games.Missions
         public EventScheduler GameEventScheduler { get => Game.GameEventScheduler; }
         public bool IsInitialized { get; private set; }
         public bool HasMissions { get => _missionDict.Count > 0; }
-        public List<PrototypeId> ActiveMissions { get; private set; } = new();
+        public List<PrototypeId> ActiveMissions { get; private set; }
 
         public bool EventsRegistred { get; private set; }
         public Action<AreaCreatedGameEvent> AreaCreatedAction { get; private set; }
@@ -54,7 +54,7 @@ namespace MHServerEmu.Games.Missions
         public Action<PlayerFailedMissionGameEvent> PlayerFailedMissionAction { get; private set; }
 
         private ulong _regionId;
-        private HashSet<ulong> _missionInterestEntities = new();
+        private readonly HashSet<ulong> _missionInterestEntities;
         private InteractionOptimizationFlags _optimizationFlag;
 
         public MissionManager(Game game, IMissionManagerOwner owner)
@@ -70,10 +70,17 @@ namespace MHServerEmu.Games.Missions
             PlayerInteractAction = OnPlayerInteract;
             PlayerCompletedMissionAction = OnPlayerCompletedMission;
             PlayerFailedMissionAction = OnPlayerFailedMission;
+
+            _missionDict = new();
+            _spawnedMissions = new();
+            _missionInterestEntities = new();
+            _legendaryMissionBlacklist = new();
+            ActiveMissions = new();
         }
 
         public void Deallocate()
         {
+            ActiveMissions.Clear();
             _missionInterestEntities.Clear();
 
             foreach (var mission in _missionDict.Values)
@@ -81,6 +88,11 @@ namespace MHServerEmu.Games.Missions
 
             _missionDict.Clear();
             _legendaryMissionBlacklist.Clear();
+
+            foreach (var spawnEvent in _spawnedMissions.Values)
+                spawnEvent?.Destroy();
+
+            _spawnedMissions.Clear();
         }
 
         public void Shutdown(Region region)
@@ -1010,8 +1022,11 @@ namespace MHServerEmu.Games.Missions
 
         public void RemoveSpawnedMission(PrototypeId missionRef)
         {
-            if (_spawnedMissions.ContainsKey(missionRef))
+            if (_spawnedMissions.TryGetValue(missionRef, out var spawnEvent))
+            {
                 _spawnedMissions.Remove(missionRef);
+                spawnEvent.Destroy();
+            }
         }
 
         public MissionSpawnState GetSpawnStateForMission(MissionPrototype missionProto)
@@ -1090,12 +1105,19 @@ namespace MHServerEmu.Games.Missions
                     success &= Serializer.Transfer(archive, ref guid);
 
                     PrototypeId missionRef = GameDatabase.GetDataRefByPrototypeGuid((PrototypeGuid)guid);
-                    Mission mission = CreateMission(missionRef);
-                    success &= Serializer.Transfer(archive, ref mission);
-                    InsertMission(mission);
+                    var missionProto = GameDatabase.GetPrototype<MissionPrototype>(missionRef);
+                    // if (ShouldCreateMission(missionProto))
+                    {
+                        Mission mission = CreateMission(missionRef);
+                        success &= Serializer.Transfer(archive, ref mission);
+                        if (ShouldCreateMission(missionProto)) // REMOVEME
+                            InsertMission(mission);
+                        else mission.Destroy(); // REMOVEME
 
-                    if (archive.IsReplication == false)
-                        mission.SetCreationState(MissionCreationState.Loaded);
+                        if (archive.IsReplication == false)
+                            mission.SetCreationState(MissionCreationState.Loaded);
+                    }
+                    // else archive.Skip(); // TODO add Archive.Skip
                 }
 
                 int numBlacklistCategories = 0;
