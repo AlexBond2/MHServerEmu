@@ -25,6 +25,6 @@ jobs:
       with:
         name: MHServerEmu-Test-${{ env.DATE }}-Achievements-windows-x64
         path: |
-          ./src/MHServerEmu/bin/x64/Release/net8.0
-          !./src/MHServerEmu/bin/x64/Release/net8.0/*.pdb
-          !./src/MHServerEmu/bin/x64/Release/net8.0/*.xml
+          ./src/MHServerEmu/bin/x64/Debug/net8.0
+          !./src/MHServerEmu/bin/x64/Debug/net8.0/*.pdb
+          !./src/MHServerEmu/bin/x64/Debug/net8.0/*.xml
