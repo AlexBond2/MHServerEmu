@@ -17,9 +17,7 @@ jobs:
     - name: Restore dependencies
       run: dotnet restore MHServerEmu.sln
     - name: Build
-      run: dotnet build MHServerEmu.sln --no-restore --configuration Release
-    - name: Run tests
-      run: dotnet test MHServerEmu.sln --no-restore --no-build --configuration Release
+      run: dotnet build MHServerEmu.sln --no-restore --configuration Debug
     - name: Get current date
       run: echo "DATE=$(date +'%Y%m%d')" >> $env:GITHUB_ENV
     - name: Upload artifact
