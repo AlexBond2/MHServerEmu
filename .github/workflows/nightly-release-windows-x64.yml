@@ -25,7 +25,7 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: MHServerEmu-nightly-${{ env.DATE }}-Release-windows-x64
+        name: MHServerEmu-Test-${{ env.DATE }}-Achievements-windows-x64
         path: |
           ./src/MHServerEmu/bin/x64/Release/net8.0
           !./src/MHServerEmu/bin/x64/Release/net8.0/*.pdb
