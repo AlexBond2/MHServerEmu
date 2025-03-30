@@ -34,6 +34,11 @@ namespace MHServerEmu.Games.Entities
         public override InvasiveListNode<Entity> GetInvasiveListNode(Entity element, int listId) => element.GetInvasiveListNode(listId);
     }
 
+    public readonly struct DestroyEntityEvent(Entity entity) : IGameEventData
+    {
+        public readonly Entity Entity = entity;
+    }
+
     public class EntityManager
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
@@ -51,7 +56,7 @@ namespace MHServerEmu.Games.Entities
         private readonly Stack<LinkedListNode<ulong>> _entityDestroyListNodeStack = new();
         private int _numDestroyListNodeChunks = 0;
 
-        public Event<Entity> DestroyEntityEvent = new();
+        public Event<DestroyEntityEvent> DestroyEntityEvent = new();
 
         private ulong _nextEntityId = 1;
         private ulong GetNextEntityId() { return _nextEntityId++; }
@@ -294,7 +299,7 @@ namespace MHServerEmu.Games.Entities
             entity.SetStatus(EntityStatus.PendingDestroy, true);
 
             // invoke destroyed event
-            DestroyEntityEvent.Invoke(entity);
+            DestroyEntityEvent.Invoke(new(entity));
 
             // Destroy entities belonging to this entity
             entity.DestroyContained();
@@ -318,6 +323,42 @@ namespace MHServerEmu.Games.Entities
                 _entityDbGuidDict.Remove(entity.DatabaseUniqueId);
 
             return true;
+        }
+
+        public void DestroyAllEntities()
+        {
+            IsDestroyingAllEntities = true;
+
+            bool removed;
+            int loopGuard = 100;
+
+            do
+            {
+                removed = false;
+                foreach (Entity entity in _entityDict.Values)
+                {
+                    if (entity.TestStatus(EntityStatus.Destroyed))
+                        continue;
+
+                    if (entity.IsRootOwner == false)
+                        continue;
+
+                    entity.Destroy();
+                    removed = true;
+                }
+            } while (removed && (loopGuard-- > 0));
+
+            if (loopGuard == 0)
+            {
+                Logger.Warn("DestroyAllEntities(): loopGuard == 0");
+                foreach (Entity entity in _entityDict.Values)
+                {
+                    if (entity.TestStatus(EntityStatus.Destroyed) == false)
+                        Logger.Warn($"DestroyAllEntities(): Entity is not 'Destroyed' after DestroyAllEntities() {entity}");
+                }
+            }
+
+            IsDestroyingAllEntities = false;
         }
 
         public bool AddPlayer(Player player)
@@ -478,7 +519,7 @@ namespace MHServerEmu.Games.Entities
 
             if (_entityDestroyListNodeStack.Count == 0)
             {
-                Logger.Debug($"GetDestroyListNode(): Allocating chunk {++_numDestroyListNodeChunks} for {_game}");
+                Logger.Trace($"GetDestroyListNode(): Allocating chunk {++_numDestroyListNodeChunks} for {_game}");
                 for (int i = 0; i < NodeChunkSize; i++)
                     _entityDestroyListNodeStack.Push(new(0));
             }

@@ -268,7 +268,7 @@ namespace MHServerEmu.Games.Missions
             if (Mission.IsSuspended)
             {
                 _objectiveState = newState;
-                return false;
+                return true;
             }
 
             IsChangingState = true;
@@ -468,7 +468,8 @@ namespace MHServerEmu.Games.Missions
             var objetiveProto = Prototype;
             if (objetiveProto == null) return false;
 
-            // TODO objetiveProto.ItemDropsCleanupRemaining
+            if (objetiveProto.ItemDrops.HasValue() && objetiveProto.ItemDropsCleanupRemaining)
+                Mission.CleanupItemDrops();
 
             if (_onStartActions != null && _onStartActions.Deactivate() == false) return false;
 
@@ -750,10 +751,7 @@ namespace MHServerEmu.Games.Missions
             }
             else if (widget is UIWidgetMissionText missionText)
             {
-                var name = objetiveProto.Name;
-                if (name == (LocaleStringId)8450716633619629313) // Hardfix long name for MGForgottenPyre
-                    name = (LocaleStringId)6053780125440214290;
-                missionText.SetText(LocaleStringId.Blank, name);
+                missionText.SetText(LocaleStringId.Blank, objetiveProto.Name);
                 update = true;
             }
             else if (widget is UIWidgetEntityIconsSyncData)
