@@ -852,8 +852,7 @@ namespace GameDatabaseBrowser
                 txtPrototypeGuid.Text = $"PrototypeGuid : {GameDatabase.GetPrototypeGuid((PrototypeId)prototypeId)}";
                 string prototypeClass = DataDirectory.Instance.GetPrototypeClassType((PrototypeId)prototypeId).ToString().Split('.').LastOrDefault();
                 txtPrototypeClass.Text = $"Prototype : {prototypeClass}";
-                if (_fullNameBackHistory.Count == 0 || _fullNameBackHistory.Peek() != prototypeFullName)
-                    _fullNameBackHistory.Push(prototypeFullName);
+                AddInHistory(prototypeFullName);
             }
             else
             {
@@ -886,6 +885,13 @@ namespace GameDatabaseBrowser
 
             if (propertytreeView.Items.Count == 0)
                 propertytreeView.Items.Add(PropertyNodes);
+        }
+
+        private void AddInHistory(string prototypeFullName)
+        {
+            if (_fullNameBackHistory.Count == 0 || 
+                (_fullNameBackHistory.Peek() != prototypeFullName && (_fullNameForwardHistory.Count == 0 || _fullNameForwardHistory.Peek() != prototypeFullName)))
+                    _fullNameBackHistory.Push(prototypeFullName);
         }
 
         /// <summary>
