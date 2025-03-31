@@ -957,15 +957,10 @@ namespace GameDatabaseBrowser
                 TreeViewItem subContainer = (TreeViewItem)container.ItemContainerGenerator.ContainerFromIndex(0);
                 foreach (var index in indexes)
                 {
-                    int childIndex = 0;
                     for (int i = 0; i < subContainer.Items.Count; i++)
-                    {
-                        if (i == index)
-                            childIndex = i;
-                        else
-                            BringIntoView(subContainer, i);
-                    }
-                    subContainer = BringIntoView(subContainer, childIndex, true);
+                        BringIntoView(subContainer, i);
+
+                    subContainer = BringIntoView(subContainer, index, true);
                 }
                 subContainer.Focus();
                 subContainer.IsSelected = true;
