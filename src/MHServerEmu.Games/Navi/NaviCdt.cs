@@ -66,6 +66,7 @@ namespace MHServerEmu.Games.Navi
         {
             _lastTriangle ??= triangle;
 
+            triangle.AddRef();
             TriangleList.AddBack(triangle);
             TriangleCount++;
 
@@ -88,6 +89,8 @@ namespace MHServerEmu.Games.Navi
 
             if (_lastTriangle == triangle)
                 _lastTriangle = TriangleList.Head;
+
+            triangle.Release();
         }
 
         private void RemoveTriangleFastLookupRef(NaviTriangle triangle)
@@ -120,8 +123,8 @@ namespace MHServerEmu.Games.Navi
 
         public void RemoveCollinearEdges()
         {
-            List<NaviEdge> checkedEdges = new ();
-            List<NaviEdge> collinearEdges = new ();
+            List<NaviEdge> checkedEdges = [];
+            List<NaviEdge> collinearEdges = [];
             var naviSerialCheck = new NaviSerialCheck(this);
 
             foreach (var triangle in TriangleList.Iterate())
@@ -135,7 +138,7 @@ namespace MHServerEmu.Games.Navi
                         foreach (var collinearEdge in collinearEdges)
                             collinearEdge.TestOperationSerial(naviSerialCheck);
 
-                        checkedEdges.Add(edge);
+                        checkedEdges.Add(edge.Ref);
                     }
                 }
 
@@ -149,7 +152,7 @@ namespace MHServerEmu.Games.Navi
                         RemoveEdge(collinearEdge, true);
 
                     if (FindTriangleContainingVertex(addEdge.Points[0]) != null && FindTriangleContainingVertex(addEdge.Points[1]) != null)
-                        AddEdge(addEdge);
+                        AddEdge(addEdge.Ref);
                 }
             }
         }
@@ -206,7 +209,7 @@ namespace MHServerEmu.Games.Navi
                     {
                         point = collinearEdge.OpposedPoint(point);
                         points[i] = point;
-                        collinearEdges.Add(collinearEdge);
+                        collinearEdges.Add(collinearEdge.Ref);
                     }
 
                     itEdge = collinearEdge;
@@ -215,8 +218,8 @@ namespace MHServerEmu.Games.Navi
 
             if (collinearEdges.Count > 0)
             {
-                collinearEdges.Add(edge);
-                outEdge = new NaviEdge (points[0], points[1], NaviEdgeFlags.Constraint, edge.PathingFlags);
+                collinearEdges.Add(edge.Ref);
+                outEdge = NaviEdge.Create(_navi, points[0], points[1], NaviEdgeFlags.Constraint, edge.PathingFlags).Ref;
                 return true;
             }
             else
@@ -361,20 +364,20 @@ namespace MHServerEmu.Games.Navi
 
             Stack<NaviTriangle> triStack = new ();
 
-            NaviEdge[] pointEdges = {
-                new (point, p0, NaviEdgeFlags.None),
-                new (point, p1, NaviEdgeFlags.None),
-                new (point, p2, NaviEdgeFlags.None)
-            };
+            NaviEdge[] pointEdges = [
+                NaviEdge.Create(_navi, point, p0, NaviEdgeFlags.None).Ref,
+                NaviEdge.Create(_navi, point, p1, NaviEdgeFlags.None).Ref,
+                NaviEdge.Create(_navi, point, p2, NaviEdgeFlags.None).Ref
+            ];
 
-            NaviEdge[] triangleEdges = { triangle.Edges[0], triangle.Edges[1], triangle.Edges[2] };
+            NaviEdge[] triangleEdges = [triangle.Edges[0].Ref, triangle.Edges[1].Ref, triangle.Edges[2].Ref];
 
             NaviTriangleState triangleState = new (triangle);
             RemoveTriangle(triangle);
 
             void PushStateTriangle(NaviTriangleState state, NaviEdge e0, NaviEdge e1, NaviEdge e2)
             {
-                NaviTriangle tri = new(e0, e1, e2);
+                NaviTriangle tri = NaviTriangle.Create(_navi, e0, e1, e2);
                 state.RestoreState(tri);
                 AddTriangle(tri);
                 triStack.Push(tri);
@@ -405,9 +408,9 @@ namespace MHServerEmu.Games.Navi
                         Pred.Clockwise2D(point, oppoPoint, points[i1]))
                     {
                         int edgeIndex = degTriangle.EdgeIndex(edge);
-                        var de1 = degTriangle.EdgeMod(edgeIndex + 1);
-                        var de2 = degTriangle.EdgeMod(edgeIndex + 2);
-                        var dep = new NaviEdge(point, degTriangle.OpposedVertex(edge), NaviEdgeFlags.None);
+                        var de1 = degTriangle.EdgeMod(edgeIndex + 1).Ref;
+                        var de2 = degTriangle.EdgeMod(edgeIndex + 2).Ref;
+                        var dep = NaviEdge.Create(_navi, point, degTriangle.OpposedVertex(edge), NaviEdgeFlags.None).Ref;
 
                         NaviTriangleState triangleStateDeg = new (degTriangle);
                         RemoveTriangle(degTriangle);
@@ -476,15 +479,15 @@ namespace MHServerEmu.Games.Navi
             NaviTriangle t0 = edge.Triangles[0];
             NaviTriangle t1 = edge.Triangles[1];
 
-            NaviEdge newEdge = new (t0.OpposedVertex(edge), t1.OpposedVertex(edge), edge.EdgeFlags);
+            NaviEdge newEdge = NaviEdge.Create(_navi, t0.OpposedVertex(edge), t1.OpposedVertex(edge), edge.EdgeFlags).Ref;
 
             int edgeIndex0 = t0.EdgeIndex(edge);
             int edgeIndex1 = t1.EdgeIndex(edge);
 
-            var t0e1 = t0.EdgeMod(edgeIndex0 + 1);
-            var t0e2 = t0.EdgeMod(edgeIndex0 + 2);
-            var t1e1 = t1.EdgeMod(edgeIndex1 + 1);
-            var t1e2 = t1.EdgeMod(edgeIndex1 + 2);
+            var t0e1 = t0.EdgeMod(edgeIndex0 + 1).Ref;
+            var t0e2 = t0.EdgeMod(edgeIndex0 + 2).Ref;
+            var t1e1 = t1.EdgeMod(edgeIndex1 + 1).Ref;
+            var t1e2 = t1.EdgeMod(edgeIndex1 + 2).Ref;
 
             NaviTriangleState state0 = new (t0);
             NaviTriangleState state1 = new (t1);
@@ -492,10 +495,10 @@ namespace MHServerEmu.Games.Navi
             RemoveTriangle(t0);
             RemoveTriangle(t1);
 
-            outTri0 = new (newEdge, t0e2, t1e1);
+            outTri0 = NaviTriangle.Create(_navi, newEdge, t0e2, t1e1);
             state0.RestoreState(outTri0);
 
-            outTri1 = new(newEdge, t1e2, t0e1);
+            outTri1 = NaviTriangle.Create(_navi, newEdge, t1e2, t0e1);
             state1.RestoreState(outTri1);
 
             AddTriangle(outTri0);
@@ -511,6 +514,7 @@ namespace MHServerEmu.Games.Navi
             {
                 edge = edges.PopFront();
                 AddEdge(edge, edges);
+                edge.Release();
             }
         }
 
@@ -575,8 +579,8 @@ namespace MHServerEmu.Games.Navi
             if (splitEdge != null)
             {
                 splitPoint = splitEdge.OpposedPoint(p0);
-                edges.PushBack(new(p0, splitPoint, edge.EdgeFlags, edge.PathingFlags));
-                edges.PushBack(new(splitPoint, p1, edge.EdgeFlags, edge.PathingFlags));
+                edges.PushBack(NaviEdge.Create(_navi, p0, splitPoint, edge.EdgeFlags).Ref);
+                edges.PushBack(NaviEdge.Create(_navi, splitPoint, p1, edge.EdgeFlags).Ref);
                 return;
             }
 
@@ -586,8 +590,8 @@ namespace MHServerEmu.Games.Navi
                 return;
             }
 
-            List<NaviEdge> pseudoList0 = new ();
-            List<NaviEdge> pseudoList1 = new ();
+            List<NaviEdge> pseudoList0 = [];
+            List<NaviEdge> pseudoList1 = [];
 
             NaviPoint sidePoint0, sidePoint1;
             NaviPoint point = p0;
@@ -605,10 +609,10 @@ namespace MHServerEmu.Games.Navi
             bool side = Pred.LineSide2D(p0, p1, splitEdge.Points[0].Pos) == false;
             
             sidePoint0 = splitEdge.Points[side ? 0 : 1];
-            pseudoList0.Add(triangle.FindEdge(p0, sidePoint0));
+            pseudoList0.Add(triangle.FindEdge(p0, sidePoint0).Ref);
 
             sidePoint1 = splitEdge.Points[side ? 1 : 0];
-            pseudoList1.Insert(0, triangle.FindEdge(p0, sidePoint1));            
+            pseudoList1.Insert(0, triangle.FindEdge(p0, sidePoint1).Ref);            
 
             Stack<NaviTriangle> triStack = new ();
 
@@ -629,10 +633,10 @@ namespace MHServerEmu.Games.Navi
                     side = Pred.LineSide2D(p0, p1, splitEdge.Points[0].Pos) == false;
 
                     sidePoint0 = splitEdge.Points[side ? 0 : 1];
-                    pseudoList0.Add(triOppo.FindEdge(p1, sidePoint0));
+                    pseudoList0.Add(triOppo.FindEdge(p1, sidePoint0).Ref);
 
                     sidePoint1 = splitEdge.Points[side ? 1 : 0];
-                    pseudoList1.Insert(0, triOppo.FindEdge(p1, sidePoint1));
+                    pseudoList1.Insert(0, triOppo.FindEdge(p1, sidePoint1).Ref);
 
                     triStack.Push(triangle);
                     triStack.Push(triOppo);
@@ -641,24 +645,24 @@ namespace MHServerEmu.Games.Navi
 
                 if (Segment.SegmentPointDistanceSq2D(p0.Pos, p1.Pos, splitPoint.Pos) < SplitEpsilonSq)
                 {
-                    edges.PushBack(new(p0, splitPoint, edge.EdgeFlags, edge.PathingFlags));
-                    edges.PushBack(new(splitPoint, p1, edge.EdgeFlags, edge.PathingFlags));
+                    edges.PushBack(NaviEdge.Create(_navi, p0, splitPoint, edge.EdgeFlags).Ref);
+                    edges.PushBack(NaviEdge.Create(_navi, splitPoint, p1, edge.EdgeFlags).Ref);
                     return;
                 }
 
                 side = Pred.LineSide2D(p0, p1, splitPoint.Pos) == false;
                 if (side)
                 {
-                    pseudoList0.Add(triOppo.FindEdge(sidePoint0, splitPoint));
+                    pseudoList0.Add(triOppo.FindEdge(sidePoint0, splitPoint).Ref);
                     sidePoint0 = splitPoint;
                 }
                 else
                 {
-                    pseudoList1.Insert(0, triOppo.FindEdge(sidePoint1, splitPoint));
+                    pseudoList1.Insert(0, triOppo.FindEdge(sidePoint1, splitPoint).Ref);
                     sidePoint1 = splitPoint;
                 }
 
-                if (Pred.LineSide2D(p0, p1, splitEdge.Points[0].Pos))
+                if (Pred.LineSide2D(p0, p1, splitEdge.Points[0].Ref.Pos))
                     point = splitEdge.Points[side ? 1 : 0];
                 else
                     point = splitEdge.Points[side ? 0 : 1];
@@ -669,8 +673,8 @@ namespace MHServerEmu.Games.Navi
 
             while (triStack.Count > 0) RemoveTriangle(triStack.Pop());
 
-            TriangulatepseudopolygonDelaunay(pseudoList0, p0, p1, edge, triangleState);
-            TriangulatepseudopolygonDelaunay(pseudoList1, p1, p0, edge, triangleState);
+            TriangulatepseudopolygonDelaunay(pseudoList0, p0, p1, edge.Ref, triangleState);
+            TriangulatepseudopolygonDelaunay(pseudoList1, p1, p0, edge.Ref, triangleState);
         }
 
         private NaviEdge TriangulatepseudopolygonDelaunay(List<NaviEdge> pseudoList, NaviPoint p0, NaviPoint p1, NaviEdge edge, NaviTriangleState triangleState)
@@ -680,7 +684,7 @@ namespace MHServerEmu.Games.Navi
 
             if (pseudoList.Count > 2)
             {
-                NaviEdge edgeC = pseudoList[0];                
+                NaviEdge edgeC = pseudoList[0];
                 NaviPoint pointC = (p0 != edgeC.Points[0]) ? edgeC.Points[0] : edgeC.Points[1];
 
                 int indexC = 0;
@@ -704,21 +708,21 @@ namespace MHServerEmu.Games.Navi
                 List<NaviEdge> pseudoList1 = new(pseudoList);
                 pseudoList.Clear();
 
-                edge0 = TriangulatepseudopolygonDelaunay(pseudoList0, p0, pointC, null, triangleState);
-                edge1 = TriangulatepseudopolygonDelaunay(pseudoList1, pointC, p1, null, triangleState);
+                edge0 = TriangulatepseudopolygonDelaunay(pseudoList0, p0, pointC, null, triangleState).Ref;
+                edge1 = TriangulatepseudopolygonDelaunay(pseudoList1, pointC, p1, null, triangleState).Ref;
             }
 
             if (pseudoList.Count == 2)
             {
-                edge ??= new(p0, p1, 0);
+                edge ??= NaviEdge.Create(_navi, p0, p1, 0).Ref;
 
-                edge0 = pseudoList[0];
+                edge0 = pseudoList[0].Ref;
                 pseudoList.RemoveAt(0);
 
-                edge1 = pseudoList[0];
+                edge1 = pseudoList[0].Ref;
                 pseudoList.RemoveAt(0);
 
-                NaviTriangle triangle = new(edge, edge0, edge1);
+                NaviTriangle triangle = NaviTriangle.Create(_navi, edge, edge0, edge1);
                 triangleState.RestoreState(triangle);
                 AddTriangle(triangle);
             }
@@ -729,8 +733,8 @@ namespace MHServerEmu.Games.Navi
             }
             else if (pseudoList.Count == 0)
             {
-                edge ??= new(p0, p1, 0);
-                NaviTriangle triangle = new(edge, edge0, edge1);
+                edge ??= NaviEdge.Create(_navi, p0, p1, 0).Ref;
+                NaviTriangle triangle = NaviTriangle.Create(_navi, edge, edge0, edge1);
                 triangleState.RestoreState(triangle);
                 AddTriangle(triangle);
             }
@@ -746,9 +750,9 @@ namespace MHServerEmu.Games.Navi
             NaviPoint p0 = edge.Points[0];
             NaviPoint p1 = edge.Points[1];
 
-            if(Segment.LineLineIntersect2D(splitEdge.Points[0].Pos, splitEdge.Points[1].Pos, p0.Pos, p1.Pos, out Vector3 intersectionPos) == false) return;
+            if(Segment.LineLineIntersect2D(splitEdge.Points[0].Ref.Pos, splitEdge.Points[1].Ref.Pos, p0.Pos, p1.Pos, out Vector3 intersectionPos) == false) return;
 
-            var splitPoint = _vertexLookupCache.CacheVertex(intersectionPos, out _);
+            using var splitPoint = _vertexLookupCache.CacheVertex(intersectionPos, out _).Ref;
 
             if (splitPoint.TestFlag(NaviPointFlags.Attached) == false)
             {
@@ -756,13 +760,13 @@ namespace MHServerEmu.Games.Navi
             }
             else if (splitEdge.Contains(splitPoint) == false)
             {
-                edges.PushBack(new(splitEdge.Points[0], splitPoint, splitEdge.EdgeFlags, splitEdge.PathingFlags));
-                edges.PushBack(new(splitPoint, splitEdge.Points[1], splitEdge.EdgeFlags, splitEdge.PathingFlags));
+                edges.PushBack(NaviEdge.Create(_navi, splitEdge.Points[0], splitPoint, splitEdge.EdgeFlags).Ref);
+                edges.PushBack(NaviEdge.Create(_navi, splitPoint, splitEdge.Points[1], splitEdge.EdgeFlags).Ref);
                 RemoveEdge(splitEdge, false);
             }
 
-            if (p0 != splitPoint) edges.PushBack(new(p0, splitPoint, edge.EdgeFlags, edge.PathingFlags));
-            if (splitPoint != p1) edges.PushBack(new(splitPoint, p1, edge.EdgeFlags, edge.PathingFlags));
+            if (p0 != splitPoint) edges.PushBack(NaviEdge.Create(_navi, p0, splitPoint, edge.EdgeFlags).Ref);
+            if (splitPoint != p1) edges.PushBack(NaviEdge.Create(_navi, splitPoint, p1, edge.EdgeFlags).Ref);
         }
 
         public void RemoveEdge(NaviEdge edge, bool check = true)
@@ -776,8 +780,8 @@ namespace MHServerEmu.Games.Navi
             edge.ClearFlag(NaviEdgeFlags.Constraint);
             edge.PathingFlags.Clear();
 
-            var p0 = edge.Points[0];
-            var p1 = edge.Points[1];
+            using var p0 = edge.Points[0].Ref;
+            using var p1 = edge.Points[1].Ref;
 
             Stack<NaviEdge> edgeStack = new ();
             edge.SetFlag(NaviEdgeFlags.Delaunay);
@@ -850,7 +854,7 @@ namespace MHServerEmu.Games.Navi
                 NaviEar ear = new()
                 {
                     Point = it.EdgePointCW(oppoEdgeIndex, 0),
-                    Edge = it.Edges[oppoEdgeIndex],
+                    Edge = it.Edges[oppoEdgeIndex].Ref,
                     PrevIndex = listEar.Count - 1,
                     NextIndex = listEar.Count + 1
                 };
@@ -878,15 +882,15 @@ namespace MHServerEmu.Games.Navi
                 var prevEar = listEar[ear.PrevIndex];
                 var nextEar = listEar[ear.NextIndex];
 
-                NaviEdge prevEdge = new(prevEar.Point, nextEar.Point, 0);
-                NaviTriangle prevTri = new(prevEar.Edge, ear.Edge, prevEdge);
+                NaviEdge prevEdge = NaviEdge.Create(_navi, prevEar.Point, nextEar.Point, 0);
+                NaviTriangle prevTri = NaviTriangle.Create(_navi, prevEar.Edge, ear.Edge, prevEdge);
                 triangleState.RestoreState(prevTri);
                 AddTriangle(prevTri);
 
                 prevEar.NextIndex = ear.NextIndex;
                 nextEar.PrevIndex = ear.PrevIndex;
 
-                prevEar.Edge = prevEdge;
+                prevEar.Edge = prevEdge.RefObj(prevEar.Edge);
 
                 prevEar.CalcPower(listEar, point.Pos);
                 nextEar.CalcPower(listEar, point.Pos);
@@ -898,7 +902,7 @@ namespace MHServerEmu.Games.Navi
             var prevLastEar = listEar[lastEar.PrevIndex];
             var nextLastEar = listEar[lastEar.NextIndex];
 
-            NaviTriangle lastTriangle = new(prevLastEar.Edge, lastEar.Edge, nextLastEar.Edge);
+            NaviTriangle lastTriangle = NaviTriangle.Create(_navi, prevLastEar.Edge, lastEar.Edge, nextLastEar.Edge);
             triangleState.RestoreState(lastTriangle);
             AddTriangle(lastTriangle);
 

@@ -171,12 +171,17 @@ namespace MHServerEmu.Games.Navi
         }
     }
 
-    public class NaviEdgePathingFlags
+    public class NaviEdgePathingFlags : IDisposable
     {
         public ContentFlagCounts[] ContentFlagCounts = new ContentFlagCounts[2];
 
         public NaviEdgePathingFlags()
         {
+        }
+
+        public void Dispose()
+        {
+            ContentFlagCounts = null;
         }
 
         public NaviEdgePathingFlags(NaviContentFlags[] flags0, NaviContentFlags[] flags1)

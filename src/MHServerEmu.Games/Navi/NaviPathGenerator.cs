@@ -9,6 +9,7 @@ namespace MHServerEmu.Games.Navi
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
         private NaviMesh _naviMesh;
+        private NaviSystem _navi;
         private float _radius;
         private float _width;
         private PathFlags _pathFlags;
@@ -23,7 +24,7 @@ namespace MHServerEmu.Games.Navi
 
         public NaviPathGenerator(NaviMesh naviMesh)
         {
-            // _navi = naviMesh.NaviSystem; // not used
+            _navi = naviMesh.NaviSystem;
             _naviMesh = naviMesh;
             _searchStateQueue = new(128);
         }
@@ -96,12 +97,10 @@ namespace MHServerEmu.Games.Navi
             bool startTriangleIsGoal = (_startTriangle == _goalTriangle) || (_goalPoint != null && _startTriangle.Contains(_goalPoint));
             if (startTriangleIsGoal == false || CanCrossTriangle(_startTriangle, _startPosition, _goalPosition, _width) == false)
             {
-                NaviPathSearchState state = new()
-                {
-                    Triangle = _startTriangle,
-                    DistDone = 0,
-                    DistLeft = Vector3.Distance2D(_goalPosition, _startPosition)
-                };
+                NaviPathSearchState state = NaviPathSearchState.Create(_navi);
+                state.Triangle = _startTriangle;
+                state.DistDone = 0;
+                state.DistLeft = Vector3.Distance2D(_goalPosition, _startPosition);
                 state.Distance = state.DistDone + state.DistLeft;
                 _searchStateQueue.Push(state);
 
@@ -253,12 +252,10 @@ namespace MHServerEmu.Games.Navi
                         continue;
                 }
 
-                NaviPathSearchState state = new()
-                {
-                    ParentState = topState,
-                    Triangle = triangle,
-                    Edge = edge
-                };
+                NaviPathSearchState state = NaviPathSearchState.Create(_navi);
+                state.ParentState = topState;
+                state.Triangle = triangle;
+                state.Edge = edge;
 
                 Vector3 closestPoint = Segment.SegmentPointClosestPoint(edge.Points[0].Pos, edge.Points[1].Pos, _goalPosition);
                 state.DistLeft = Vector3.Length2D(_goalPosition - closestPoint);
@@ -356,8 +353,8 @@ namespace MHServerEmu.Games.Navi
 
         private bool FunnelStep(NaviPathChannel pathChannel, List<NaviPathNode> outPathNodes)
         {
-            NaviPoint startPoint = new(_startPosition);
-            NaviPoint goalPoint = new(_goalPosition);
+            using var startPoint = NaviPoint.Create(_navi, _startPosition).Ref;
+            using var goalPoint = NaviPoint.Create(_navi, _goalPosition).Ref;
             NaviSide vertexSide;
             float radiusSq = _radius * _radius;
             NaviFunnel funnel = new (startPoint);
@@ -634,35 +631,5 @@ namespace MHServerEmu.Games.Navi
         Default = 0,
         IncompletedPath = 1 << 1,
         IgnoreSweep = 1 << 2,
-    }
-
-    public class NaviPathSearchState : IComparable<NaviPathSearchState>
-    {
-        public NaviPathSearchState ParentState;
-        public NaviTriangle Triangle;
-        public NaviEdge Edge;
-        public float DistDone;
-        public float DistLeft;
-        public float Distance;
-
-        public NaviPathSearchState() {}
-
-        public int CompareTo(NaviPathSearchState other)
-        {
-            return other.Distance.CompareTo(Distance);
-        }
-
-        public bool IsAncestor(NaviTriangle triangle)
-        {
-            NaviPathSearchState parent = ParentState;
-            while (parent != null)
-            {
-                if (parent.Triangle == triangle)
-                    return true;
-                parent = parent.ParentState;
-            }
-            return false;
-        }
-
     }
 }

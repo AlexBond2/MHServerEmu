@@ -57,6 +57,9 @@ namespace MHServerEmu.Games.Navi
 
         public void Clear()
         {
+            foreach (var vertex in _vertexCache)
+                vertex.Point?.Release();
+
             _vertexCache.Clear();
         }
 
@@ -77,7 +80,7 @@ namespace MHServerEmu.Games.Navi
                 return point;
             }
 
-            point = new NaviPoint(pos);
+            point = NaviPoint.Create(_navi, pos);
             VertexCacheKey entry = new()
             {
                 Point = point,
@@ -104,7 +107,7 @@ namespace MHServerEmu.Games.Navi
 
             VertexCacheKey entry = new()
             {
-                Point = new NaviPoint(pos)
+                Point = NaviPoint.Create(_navi, pos)
             };
 
             for (int x = x0; x <= x1; x++)
@@ -147,6 +150,7 @@ namespace MHServerEmu.Games.Navi
                 return;
             }
 
+            key.Point.Release();
             _vertexCache.Remove(key);
         }
 
@@ -169,6 +173,7 @@ namespace MHServerEmu.Games.Navi
                     Logger.Warn($"[NaviVertexLookupCache] UpdateVertex found old unattached point {key.Point} while updating {point}");
                     return;
                 }
+                key.Point.Release();
                 _vertexCache.Remove(key);
                 _vertexCache.Add(entry);
             }

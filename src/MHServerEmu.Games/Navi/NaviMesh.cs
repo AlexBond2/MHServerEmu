@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Drawing;
+using System.Text;
 using MHServerEmu.Core.Collections;
 using MHServerEmu.Core.Collisions;
 using MHServerEmu.Core.Extensions;
@@ -26,8 +27,7 @@ namespace MHServerEmu.Games.Navi
         }
 
         private static readonly Logger Logger = LogManager.CreateLogger();
-        private readonly NaviSystem _navi;
-
+        public NaviSystem NaviSystem { get;}
         public Aabb Bounds { get; private set; }
         public NaviVertexLookupCache NaviVertexLookupCache { get; private set; }
         public NaviCdt NaviCdt { get; private set; }
@@ -47,7 +47,7 @@ namespace MHServerEmu.Games.Navi
 
         public NaviMesh(NaviSystem navi)
         {
-            _navi = navi;
+            NaviSystem = navi;
             Bounds = Aabb.Zero;
             NaviVertexLookupCache = new(navi);
             NaviCdt = new(navi, NaviVertexLookupCache);
@@ -55,6 +55,7 @@ namespace MHServerEmu.Games.Navi
             MeshConnections = new(); 
             _modifyMeshPatches = new();
             _modifyMeshPatchesProjZ = new();
+            _exteriorSeedEdge = null;
         }
 
         public override string ToString()
@@ -92,22 +93,22 @@ namespace MHServerEmu.Games.Navi
             float yMin = bounds.Min.Y - padding;
             float yMax = bounds.Max.Y + padding;
 
-            NaviPoint p0 = new(new (xMin, yMin, 0.0f));
-            NaviPoint p1 = new(new (xMax, yMin, 0.0f));
-            NaviPoint p2 = new(new (xMax, yMax, 0.0f));
-            NaviPoint p3 = new(new (xMin, yMax, 0.0f));
+            NaviPoint p0 = NaviPoint.Create(NaviSystem, new (xMin, yMin, 0.0f));
+            NaviPoint p1 = NaviPoint.Create(NaviSystem, new(xMax, yMin, 0.0f));
+            NaviPoint p2 = NaviPoint.Create(NaviSystem, new(xMax, yMax, 0.0f));
+            NaviPoint p3 = NaviPoint.Create(NaviSystem, new(xMin, yMax, 0.0f));
 
-            NaviEdge e0 = new(p0, p1, NaviEdgeFlags.Constraint);
-            NaviEdge e1 = new(p1, p2, NaviEdgeFlags.Constraint);
-            NaviEdge e2 = new(p2, p3, NaviEdgeFlags.Constraint);
-            NaviEdge e3 = new(p3, p0, NaviEdgeFlags.Constraint);
+            NaviEdge e0 = NaviEdge.Create(NaviSystem, p0, p1, NaviEdgeFlags.Constraint);
+            NaviEdge e1 = NaviEdge.Create(NaviSystem, p1, p2, NaviEdgeFlags.Constraint);
+            NaviEdge e2 = NaviEdge.Create(NaviSystem, p2, p3, NaviEdgeFlags.Constraint);
+            NaviEdge e3 = NaviEdge.Create(NaviSystem, p3, p0, NaviEdgeFlags.Constraint);
 
-            NaviEdge e02 = new(p0, p2, NaviEdgeFlags.None);
+            NaviEdge e02 = NaviEdge.Create(NaviSystem, p0, p2, NaviEdgeFlags.None);
 
-            NaviCdt.AddTriangle(new(e0, e1, e02));
-            NaviCdt.AddTriangle(new(e2, e3, e02));
+            NaviCdt.AddTriangle(NaviTriangle.Create(NaviSystem, e0, e1, e02));
+            NaviCdt.AddTriangle(NaviTriangle.Create(NaviSystem, e2, e3, e02));
 
-            _exteriorSeedEdge = e0;
+            _exteriorSeedEdge = e0.RefObj(_exteriorSeedEdge);
         }
 
         public void Release()
@@ -117,7 +118,7 @@ namespace MHServerEmu.Games.Navi
             _modifyMeshPatchesProjZ.Clear();
             DestroyMeshConnections();
             _edges.Clear();
-            _exteriorSeedEdge = null;
+            NaviObject.SafeRelease(ref _exteriorSeedEdge);
             ClearGenerationCache();
             NaviCdt.Release();
         }
@@ -146,7 +147,7 @@ namespace MHServerEmu.Games.Navi
             {
                 foreach (var patch in _modifyMeshPatches)
                     if (ModifyMesh(patch.Transform, patch.Patch, false) == false) break;
-                if (_navi.CheckErrorLog(false)) return false;
+                if (NaviSystem.CheckErrorLog(false)) return false;
             }
             _modifyMeshPatches.Clear();
 
@@ -154,25 +155,25 @@ namespace MHServerEmu.Games.Navi
             {
                 foreach (var patch in _modifyMeshPatchesProjZ)
                     if (ModifyMesh(patch.Transform, patch.Patch, true) == false) break;
-                if (_navi.CheckErrorLog(false)) return false;
+                if (NaviSystem.CheckErrorLog(false)) return false;
             }
             _modifyMeshPatchesProjZ.Clear();
             //NaviCdt.SaveObjMesh($"{_navi.Region.PrototypeName}[All].obj", PathFlags.None);
             MarkupMesh(false);
-            if (_navi.CheckErrorLog(false)) return false;
+            if (NaviSystem.CheckErrorLog(false)) return false;
 
             bool removeCollinearEdges = false; 
             if (removeCollinearEdges)
             {
                 NaviCdt.RemoveCollinearEdges();
-                if (_navi.CheckErrorLog(false)) return false;
+                if (NaviSystem.CheckErrorLog(false)) return false;
 
                 MarkupMesh(false);
-                if (_navi.CheckErrorLog(false)) return false;
+                if (NaviSystem.CheckErrorLog(false)) return false;
             }
 
             MergeMeshConnections();
-            if (_navi.CheckErrorLog(false)) return false;
+            if (NaviSystem.CheckErrorLog(false)) return false;
 
             //NaviCdt.SaveObjMesh($"{_navi.Region.PrototypeName}.obj");
             IsMeshValid = true;
@@ -214,13 +215,16 @@ namespace MHServerEmu.Games.Navi
                     _points[edge.Index1] = p1;
                 }
 
-                if (_navi.HasErrors() && _navi.CheckErrorLog(false, patch.ToString())) return false;
+                if (NaviSystem.HasErrors() && NaviSystem.CheckErrorLog(false, patch.ToString())) return false;
                 if (p0 == p1) continue;
 
-                NaviCdt.AddEdge(new(p0, p1, NaviEdgeFlags.Constraint, new(edge.Flags0, edge.Flags1)));
+                using NaviEdgePathingFlags flags = new(edge.Flags0, edge.Flags1);
+                NaviEdge edgeRef = NaviEdge.Create(NaviSystem, p0, p1, NaviEdgeFlags.Constraint, flags).Ref;
+                NaviCdt.AddEdge(edgeRef);
+                edgeRef.Release();
             }
 
-            if (_navi.HasErrors() && _navi.CheckErrorLog(false, patch.ToString())) return false;
+            if (NaviSystem.HasErrors() && NaviSystem.CheckErrorLog(false, patch.ToString())) return false;
 
             return true;
         }
@@ -236,7 +240,7 @@ namespace MHServerEmu.Games.Navi
 
             MarkupState state = new()
             {
-                Triangle = triangle,
+                Triangle = triangle.Ref,
                 FlagCounts = new()
                 {
                     AddFly = 1,
@@ -256,19 +260,17 @@ namespace MHServerEmu.Games.Navi
             while (stateStack.Count > 0)
             {
                 state = stateStack.Pop();
-                triangle = state.Triangle;
+                triangle = state.Triangle.RefObj(triangle);
                 for (int edgeIndex = 0; edgeIndex < 3; edgeIndex++)
                 {
-                    var edge = triangle.Edges[edgeIndex];
+                    var edge = triangle.Edges[edgeIndex].Ref;
                     NaviTriangle opposedTriangle = edge.OpposedTriangle(triangle);
                     if (opposedTriangle == null ) continue;
 
                     if (opposedTriangle.TestFlag(NaviTriangleFlags.Markup) == false)
                     {
-                        MarkupState stateOppo = new(state)
-                        {
-                            Triangle = opposedTriangle
-                        };
+                        using MarkupState stateOppo = new(state);
+                        stateOppo.Triangle = opposedTriangle.RefObj(stateOppo.Triangle);                        
 
                         if (edge.TestFlag(NaviEdgeFlags.Constraint))
                         {
@@ -334,11 +336,18 @@ namespace MHServerEmu.Games.Navi
                 var edge = edgeStack.Pop();
                 if (edge.TestFlag(NaviEdgeFlags.Constraint))
                     NaviCdt.RemoveEdge(edge);
+                edge.Release();
             }
 
-            if (removeExterior) _exteriorSeedEdge = null;
+            if (removeExterior)
+            {
+                _exteriorSeedEdge?.Release();
+                _exteriorSeedEdge = null;
+            }
+
             ReverseMarkupMesh();
             IsMarkupValid = true;
+            triangle.Release();
         }
 
         private void ReverseMarkupMesh()
@@ -667,7 +676,7 @@ namespace MHServerEmu.Games.Navi
             return PointOnLineResult.Failed;
         }
 
-        private class MarkupState
+        private class MarkupState : IDisposable
         {
             public NaviTriangle Triangle { get; set; }
             public ContentFlagCounts FlagCounts;
@@ -678,8 +687,14 @@ namespace MHServerEmu.Games.Navi
 
             public MarkupState(MarkupState state)
             {
-                Triangle = state.Triangle;
+                Triangle = state.Triangle.Ref;
                 FlagCounts = state.FlagCounts;
+            }
+
+            public void Dispose()
+            {
+                Triangle?.Dispose();
+                Triangle = null;
             }
         }
     }

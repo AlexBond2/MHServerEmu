@@ -7,6 +7,7 @@ namespace MHServerEmu.Games.Navi
     [Flags]
     public enum NaviTriangleFlags
     {
+        None = 0,
         Attached = 1 << 0,
         Markup = 1 << 1,
     }
@@ -17,25 +18,50 @@ namespace MHServerEmu.Games.Navi
         public override InvasiveListNode<NaviTriangle> GetInvasiveListNode(NaviTriangle element, int listId) => element.InvasiveListNode;
     }
 
-    public class NaviTriangle
+    public class NaviTriangle: NaviObject
     {
-        public NaviEdge[] Edges { get; private set; }
+        public NaviEdge[] Edges { get; private set; } = new NaviEdge[3];
         public byte EdgeSideFlags { get; private set; }
         public NaviTriangleFlags Flags { get; private set; }
         public PathFlags PathingFlags { get; set; }
-        public InvasiveListNode<NaviTriangle> InvasiveListNode { get; private set; }
+        public InvasiveListNode<NaviTriangle> InvasiveListNode { get; private set; } = new();
 
         public ContentFlagCounts ContentFlagCounts;     // ContentFlagCounts needs to be a field for Clear() calls
 
-        public NaviTriangle(NaviEdge e0, NaviEdge e1, NaviEdge e2)
+        public NaviTriangle(NaviSystem navi) : base(navi) { }
+
+        public static NaviTriangle Create(NaviSystem navi, NaviEdge e0, NaviEdge e1, NaviEdge e2)
         {
-            Edges = new NaviEdge[3];
-            Edges[0] = e0;
-            Edges[1] = e1;
-            Edges[2] = e2;
-            InvasiveListNode = new();
-            UpdateEdgeSideFlags();
-            Attach();
+            var triangle = navi.NewTriangle();
+            triangle.Edges[0] = e0.Ref;
+            triangle.Edges[1] = e1.Ref;
+            triangle.Edges[2] = e2.Ref;
+            triangle.UpdateEdgeSideFlags();
+            triangle.Attach();
+
+            return triangle;
+        }
+
+        public NaviTriangle Ref
+        {
+            get
+            {
+                AddRef();
+                return this;
+            }
+        }
+
+        public override void Dispose()
+        {
+            Release(Edges);
+            base.Dispose();
+        }
+
+        public override void Reset()
+        {
+            base.Reset();
+            Release(Edges);
+            Flags = NaviTriangleFlags.None;
         }
 
         public uint GetHash()

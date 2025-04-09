@@ -8,19 +8,38 @@ namespace MHServerEmu.Games.Navi
         Attached
     }
 
-    public class NaviPoint : IComparable<NaviPoint>
+    public class NaviPoint : NaviObject, IComparable<NaviPoint>
     {
         public Vector3 Pos { get; set; }
         public NaviPointFlags Flags { get; set; }
         public sbyte InfluenceRef { get; set; }
         public float InfluenceRadius { get; set; }
-        public ulong Id { get; private set; }
-        private static ulong NextId = 0;
+        public ulong Id { get; set; }
 
-        public NaviPoint(Vector3 pos)
+        public NaviPoint(NaviSystem navi) : base(navi) { }
+
+        public static NaviPoint Create(NaviSystem navi, Vector3 pos)
         {
-            Pos = pos;
-            Id = NextId++;
+            var point = navi.NewPoint();
+            point.Pos = pos;
+            return point;
+        }
+
+        public NaviPoint Ref
+        {
+            get
+            {
+                AddRef();
+                return this;
+            }
+        }
+
+        public override void Reset()
+        {
+            base.Reset();
+            Flags = NaviPointFlags.None;
+            InfluenceRef = 0;
+            InfluenceRadius = 0.0f;
         }
 
         public uint GetHash()

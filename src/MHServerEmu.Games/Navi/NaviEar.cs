@@ -2,7 +2,7 @@
 
 namespace MHServerEmu.Games.Navi
 {
-    public class NaviEar : IComparable<NaviEar>
+    public class NaviEar : IComparable<NaviEar>, IDisposable
     {
         public float Power;
         public NaviPoint Point;
@@ -25,6 +25,11 @@ namespace MHServerEmu.Games.Navi
                 Power = Pred.CalcEarPower(p0.Pos, p1.Pos, p2.Pos, point);
             else
                 Power = float.MaxValue;
+        }
+
+        public void Dispose()
+        {
+            Edge?.Dispose();
         }
     }
 }

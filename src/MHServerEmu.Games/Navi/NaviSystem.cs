@@ -1,4 +1,5 @@
-﻿using MHServerEmu.Core.Logging;
+﻿using MHServerEmu.Core.Collisions;
+using MHServerEmu.Core.Logging;
 using MHServerEmu.Games.Regions;
 using System.Text;
 
@@ -9,7 +10,22 @@ namespace MHServerEmu.Games.Navi
         public bool Log = true;
         public static readonly Logger Logger = LogManager.CreateLogger();
         public Region Region { get; private set; }
-        public List<NaviErrorReport> ErrorLog { get; private set; } = new ();
+        public List<NaviErrorReport> ErrorLog { get; private set; } = [];
+
+        private readonly NaviPool<NaviPoint> _pointPool;
+        private readonly NaviPool<NaviEdge> _edgePool;
+        private readonly NaviPool<NaviTriangle> _trianglePool;
+        private readonly NaviPool<NaviPathSearchState> _pathSearchStatePool;
+
+        private ulong _nextId = 0;
+
+        public NaviSystem()
+        {
+            _pointPool = new(() => new NaviPoint(this));
+            _edgePool = new(() => new NaviEdge(this));
+            _trianglePool = new(() => new NaviTriangle(this));
+            _pathSearchStatePool = new(() => new NaviPathSearchState(this), 32768);
+        }
 
         public bool Initialize(Region region)
         {
@@ -17,9 +33,31 @@ namespace MHServerEmu.Games.Navi
             return true;
         }
 
+        public NaviPoint NewPoint()
+        {
+            var point = _pointPool.Get();
+            point.Id = _nextId++;
+            return point;
+        }
+
+        public NaviEdge NewEdge() => _edgePool.Get();
+        public NaviTriangle NewTriangle() => _trianglePool.Get();
+        public NaviPathSearchState NewPathSearchState() => _pathSearchStatePool.Get();
+
+        internal void Delete(NaviObject obj)
+        {
+            switch (obj)
+            {
+                case NaviPoint point: _pointPool.Return(point); break;
+                case NaviEdge edge: _edgePool.Return(edge); break;
+                case NaviTriangle triangle: _trianglePool.Return(triangle); break;
+                case NaviPathSearchState state: _pathSearchStatePool.Return(state); break;
+            }
+        }
+
         public void LogError(string msg)
         {
-            NaviErrorReport errorReport = new()
+            using NaviErrorReport errorReport = new()
             {
                 Msg = msg
             };
@@ -28,20 +66,20 @@ namespace MHServerEmu.Games.Navi
 
         public void LogError(string msg, NaviEdge edge)
         {
-            NaviErrorReport errorReport = new()
+            using NaviErrorReport errorReport = new()
             {
                 Msg = msg,
-                Edge = edge
+                Edge = edge.Ref
             };
             ErrorLog.Add(errorReport);
         }
 
         public void LogError(string msg, NaviPoint point)
         {
-            NaviErrorReport errorReport = new()
+            using NaviErrorReport errorReport = new()
             {
                 Msg = msg,
-                Point = point
+                Point = point.Ref
             };
             ErrorLog.Add(errorReport);
         }
@@ -89,11 +127,19 @@ namespace MHServerEmu.Games.Navi
 
     }
 
-    public struct NaviErrorReport
+    public struct NaviErrorReport : IDisposable
     { 
         public string Msg;
         public NaviPoint Point;
-        public NaviEdge Edge;
+        public NaviEdge Edge; 
+
+        public void Dispose()
+        {
+            Point?.Dispose();
+            Point = null;
+            Edge?.Dispose();
+            Edge = null;
+        }
     }
 
     public class NaviSerialCheck
@@ -109,9 +155,17 @@ namespace MHServerEmu.Games.Navi
 
     }
 
-    public class NavigationInfluence
+    public class NavigationInfluence : IDisposable
     {
         public NaviPoint Point;
         public NaviTriangle Triangle;
+
+        public void Dispose()
+        {
+            Triangle?.Dispose();
+            Triangle = null;
+            Point?.Dispose();
+            Point = null;
+        }
     }
 }

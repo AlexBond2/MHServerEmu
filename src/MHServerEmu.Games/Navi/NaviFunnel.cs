@@ -11,7 +11,7 @@ namespace MHServerEmu.Games.Navi
         {
             PushFront(new(point, NaviSide.Point));
             _apex = LeftV();
-            _pathStart = point;
+            _pathStart = point.Ref;
         }
 
         private FunnelVertex LeftV() => Front;

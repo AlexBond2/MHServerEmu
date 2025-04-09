@@ -13,24 +13,53 @@ namespace MHServerEmu.Games.Navi
         Mask = 11, // Constraint | Flag1 | Door
     }
 
-    public class NaviEdge
+    public class NaviEdge: NaviObject
     {
         public NaviEdgeFlags EdgeFlags { get; private set; }
         public NaviEdgePathingFlags PathingFlags { get; set; }
-        public NaviPoint[] Points { get; set; }
-        public NaviTriangle[] Triangles { get; set; }
+        public NaviPoint[] Points { get; set; } = new NaviPoint[2];
+        public NaviTriangle[] Triangles { get; set; } = new NaviTriangle[2];
         public bool IsAttached => Triangles[0] != null || Triangles[1] != null;
 
         public uint Serial { get; private set; }
 
-        public NaviEdge(NaviPoint p0, NaviPoint p1, NaviEdgeFlags edgeFlags, NaviEdgePathingFlags pathingFlags = null)
+        public NaviEdge(NaviSystem navi) : base(navi) { }
+
+        public static NaviEdge Create(NaviSystem navi, NaviPoint p0, NaviPoint p1, NaviEdgeFlags edgeFlags, NaviEdgePathingFlags pathingFlags = null)
         {
-            EdgeFlags = edgeFlags;
-            PathingFlags = new(pathingFlags);
-            Points = new NaviPoint[2];
-            Points[0] = p0;
-            Points[1] = p1;
-            Triangles = new NaviTriangle[2];
+            var edge = navi.NewEdge();
+            edge.EdgeFlags = edgeFlags;
+            edge.PathingFlags = new(pathingFlags);
+            edge.Points[0] = p0.Ref;
+            edge.Points[1] = p1.Ref;
+
+            return edge;
+        }
+
+        public NaviEdge Ref
+        {
+            get
+            {
+                AddRef();
+                return this;
+            }
+        }
+
+        public override void Dispose()
+        {
+            Release(Points);
+            Release(Triangles);
+            base.Dispose();
+        }
+
+        public override void Reset()
+        {
+            base.Reset();
+            Release(Points);
+            Release(Triangles);
+            EdgeFlags = NaviEdgeFlags.None;
+            PathingFlags = null;
+            Serial = 0;
         }
 
         public uint GetHash()
