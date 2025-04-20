@@ -580,7 +580,7 @@ namespace MHServerEmu.Games.Missions
             if (Player == null || HasMissions == false) return;
 
             // initialize and clear old missions
-            List<Mission> oldMissions = new();
+            List<Mission> oldMissions = ListPool<Mission>.Instance.Get();
             foreach (var mission in _missionDict.Values)
             {
                 if (mission == null) continue;
@@ -595,6 +595,7 @@ namespace MHServerEmu.Games.Missions
                 else
                     DeleteMission(mission.PrototypeDataRef);
             }
+            ListPool<Mission>.Instance.Return(oldMissions);
 
             ResetMissionsToCheckpoint();
 
@@ -1432,10 +1433,14 @@ namespace MHServerEmu.Games.Missions
                 }
             }
 
-
+            var legendaryMissions = ListPool<Mission>.Instance.Get();
             foreach (var mission in _missionDict.Values)
                 if (mission.IsLegendaryMission)
-                    mission.RestoreLegendaryMissionState(properties);
+                    legendaryMissions.Add(mission);
+
+            foreach (var mission in legendaryMissions)
+                mission.RestoreLegendaryMissionState(properties);
+            ListPool<Mission>.Instance.Return(legendaryMissions);
 
             InitializeMissions();
 
@@ -1574,8 +1579,10 @@ namespace MHServerEmu.Games.Missions
                 hasInterest |= outInteractData.PlayerHUDFlags.HasFlag(PlayerHUDEnum.ShowObjs);
 
                 if (worldEntity is Transition transition)
-                    foreach (var dest in transition.Destinations)
+                    for (int i = 0; i < transition.Destinations.Count; i++)
                     {
+                        var dest = transition.Destinations[i];
+
                         var regionRef = dest.RegionRef;
                         if (regionRef != PrototypeId.Invalid)
                         {

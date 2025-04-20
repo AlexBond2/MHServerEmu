@@ -113,6 +113,9 @@ namespace MHServerEmu.Games.Entities
         // TODO: Serialize on migration
         private Dictionary<ulong, MapDiscoveryData> _mapDiscoveryDict = new();
 
+        private uint _loginCount;
+        private TimeSpan _loginRewardCooldownTimeStart;
+
         private TeleportData _teleportData;
         private SpawnGimbal _spawnGimbal;
         private bool _newPlayerUISystemsUnlocked;
@@ -131,6 +134,7 @@ namespace MHServerEmu.Games.Entities
         public bool IsFullscreenMoviePlaying { get => Properties[PropertyEnum.FullScreenMoviePlaying]; }
         public bool IsOnLoadingScreen { get; private set; }
         public bool IsFullscreenObscured { get => IsFullscreenMoviePlaying || IsOnLoadingScreen; }
+        public uint FullscreenMovieSyncRequestId { get; set; }
 
         public bool IsSwitchingAvatar { get; private set; }
 
@@ -202,23 +206,10 @@ namespace MHServerEmu.Games.Entities
         {
             base.OnPostInit(settings);
 
-            // TODO: Clean this up
-            //---
+            SetGiftingRestrictions();
 
-            // Todo: send this separately in NetMessageGiftingRestrictionsUpdate on login
-            Properties[PropertyEnum.LoginCount] = 1075;
-            _emailVerified = true;
-            _accountCreationTimestamp = Clock.DateTimeToUnixTime(new(2023, 07, 16, 1, 48, 0));   // First GitHub commit date
-
-            // Social tab stub
+            // REMOVEME: Social tab stub
             _community.AddMember(10, "Coming Soon", CircleId.__Friends);
-
-            // Initialize
-            OnEnterGameInitStashTabOptions();
-
-            // TODO: Clean up gameplay options init for new players
-            if (settings.ArchiveData.IsNullOrEmpty())
-                GameplayOptions.ResetToDefaults();
         }
 
         public override void OnPropertyChange(PropertyId id, PropertyValue newValue, PropertyValue oldValue, SetPropertyFlags flags)
@@ -448,6 +439,12 @@ namespace MHServerEmu.Games.Entities
                         }
                     }
                 }
+
+                if (archive.Version >= ArchiveVersion.ImplementedLoginRewards)
+                {
+                    success &= Serializer.Transfer(archive, ref _loginCount);
+                    success &= Serializer.Transfer(archive, ref _loginRewardCooldownTimeStart);
+                }
             }
 
             return success;
@@ -473,6 +470,8 @@ namespace MHServerEmu.Games.Entities
 
             // Enter game to become added to the AOI
             base.EnterGame(settings);
+
+            OnEnterGameInitStashTabOptions();
 
             InitializeVendors();
             ScheduleCheckHoursPlayedEvent();
@@ -2045,12 +2044,16 @@ namespace MHServerEmu.Games.Entities
             var movieProto = GameDatabase.GetPrototype<FullscreenMoviePrototype>(movieRef);
             if (movieProto == null) return;
             if (movieProto.MovieType == MovieType.Cinematic)
+            {
                 Properties[PropertyEnum.FullScreenMovieSession] = Game.Random.Next();
+                Properties[PropertyEnum.FullScreenMoviePlaying] = true;
+            }
         }
 
         public void OnFullscreenMovieFinished(PrototypeId movieRef, bool userCancelled, uint syncRequestId)
         {
-            // TODO syncRequestId ?
+            if (syncRequestId != 0 && syncRequestId < FullscreenMovieSyncRequestId) return;
+
             Logger.Trace($"OnFullscreenMovieFinished {GameDatabase.GetFormattedPrototypeName(movieRef)} Canceled = {userCancelled} by {_playerName}");
 
             var movieProto = GameDatabase.GetPrototype<FullscreenMoviePrototype>(movieRef);
@@ -2503,8 +2506,10 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
-        public void OnPlayKismetSeqDone(PrototypeId kismetSeqRef)
+        public void OnPlayKismetSeqDone(PrototypeId kismetSeqRef, uint syncRequestId)
         {
+            if (syncRequestId != 0 && syncRequestId < FullscreenMovieSyncRequestId) return;
+
             if (kismetSeqRef == PrototypeId.Invalid) return;
             var kismetSeqProto = GameDatabase.GetPrototype<KismetSequencePrototype>(kismetSeqRef);
             if (kismetSeqProto == null) return;
@@ -2530,6 +2535,23 @@ namespace MHServerEmu.Games.Entities
             SendMessage(NetMessagePlayKismetSeq.CreateBuilder()
                 .SetKismetSeqPrototypeId((ulong)kismetSeqRef)
                 .Build());
+        }
+
+        public void SendFullscreenMovieSync()
+        {
+            if (Properties.HasProperty(PropertyEnum.FullScreenMovieQueued) == false) return;
+
+            var message = NetMessageFullscreenMovieSync.CreateBuilder();
+            message.SetSyncRequestId(++FullscreenMovieSyncRequestId);
+
+            foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.FullScreenMovieQueued))
+            {
+                Property.FromParam(kvp.Key, 0, out PrototypeId movieRef);
+                if (movieRef == PrototypeId.Invalid) continue;
+                message.AddMovieProtoId((ulong)movieRef);
+            }
+
+            SendMessage(message.Build());
         }
 
         public void SendAIAggroNotification(PrototypeId bannerMessageRef, Agent aiAgent, Player targetPlayer, bool party = false)
@@ -2888,6 +2910,98 @@ namespace MHServerEmu.Games.Entities
         {
             if (vanityTitleProtoRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "IsVanityTitleUnlocked(): vanityTitleProtoRef == PrototypeId.Invalid");
             return Properties.HasProperty(new PropertyId(PropertyEnum.VanityTitleUnlocked, vanityTitleProtoRef));
+        }
+
+        #endregion
+
+        #region Daily Login
+
+        public void CheckDailyLogin()
+        {
+            // Send currency balance so that the client has something to display without opening the store.
+            // TODO: Add coupons here?
+            SendMessage(NetMessageGetCurrencyBalanceResponse.CreateBuilder()
+                .SetCurrencyBalance(GazillioniteBalance)
+                .Build());
+
+            // Update veteran (login) rewards
+            if (Game.GameOptions.VeteranRewardsEnabled)
+            {
+                int loginCount = GetLoginCount();
+
+                GiveLoginRewards(loginCount);
+                Properties[PropertyEnum.LoginCount] = loginCount;
+            }
+
+            // Send gifting restrictions update.
+            // NOTE: Currently we don't actually need this since we don't rely on external services,
+            // but I'm leaving this here for consistency with our packet captures.
+            SendMessage(NetMessageGiftingRestrictionsUpdate.CreateBuilder()
+                .SetEmailVerified(_emailVerified)
+                .SetAccountCreationTimestampUtc((long)_accountCreationTimestamp.TotalSeconds)
+                .Build());
+        }
+
+        private int GetLoginCount()
+        {
+            // Check the rollover (daily at 10 AM UTC+0, same as shared quests)
+            using PropertyCollection rolloverProperties = ObjectPoolManager.Instance.Get<PropertyCollection>();
+            rolloverProperties[PropertyEnum.LootCooldownRolloverWallTime, 0, (PropertyParam)Weekday.All] = 10f;
+
+            TimeSpan currentTime = Clock.UnixTime;
+
+            if (LootUtilities.GetLastLootCooldownRolloverWallTime(rolloverProperties, currentTime, out TimeSpan lastRolloverTime) == false)
+                return Logger.WarnReturn(0, "GetLoginCount(): Failed to get last loot cooldown rollover wall time");
+
+            if (lastRolloverTime > _loginRewardCooldownTimeStart)
+            {
+                _loginCount++;
+                _loginRewardCooldownTimeStart = currentTime;
+                Logger.Trace($"GetLoginCount(): Rollover for player [{this}], loginCount = {_loginCount}");
+            }
+
+            return (int)_loginCount;
+        }
+
+        private void GiveLoginRewards(int loginCount)
+        {
+            LootManager lootManager = Game.LootManager;
+
+            foreach (PrototypeId loginRewardProtoRef in DataDirectory.Instance.IteratePrototypesInHierarchy<LoginRewardPrototype>(PrototypeIterateFlags.NoAbstract))
+            {
+                LoginRewardPrototype loginRewardProto = loginRewardProtoRef.As<LoginRewardPrototype>();
+                if (loginRewardProto == null)
+                {
+                    Logger.Warn("GiveLoginRewards(): loginRewardProto == null");
+                    continue;
+                }
+
+                if (loginRewardProto.Day > loginCount)
+                    continue;
+
+                PropertyId rewardId = new(PropertyEnum.LoginRewardReceivedDate, loginRewardProtoRef);
+
+                if (Properties.HasProperty(rewardId))
+                    continue;
+
+                if (lootManager.GiveItem(loginRewardProto.Item, LootContext.CashShop, this) == false)
+                {
+                    Logger.Warn($"GiveLoginRewards(): Failed to give login reward {loginRewardProto} to player [{this}]");
+                    continue;
+                }
+
+                Properties[rewardId] = (long)Clock.UnixTime.TotalSeconds;
+            }
+        }
+
+        private void SetGiftingRestrictions()
+        {
+            // Email is always verified (for now)
+            _emailVerified = true;
+
+            // We are taking advantage of the fact that our database guids include account creation timestamp.
+            // Review this code if this ever changes.
+            _accountCreationTimestamp = TimeSpan.FromSeconds(DatabaseUniqueId >> 16 & 0xFFFFFFFF);
         }
 
         #endregion
