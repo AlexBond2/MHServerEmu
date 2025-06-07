@@ -25,6 +25,7 @@ using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Powers;
 using MHServerEmu.Games.Regions;
+using MHServerEmu.Games.Social;
 using MHServerEmu.Games.UI;
 
 namespace MHServerEmu.Games
@@ -69,12 +70,14 @@ namespace MHServerEmu.Games
 
         public GRandom Random { get; } = new();
         public PlayerConnectionManager NetworkManager { get; }
+        public ServiceMailbox ServiceMailbox { get; }
         public EventScheduler GameEventScheduler { get; private set; }
         public EntityManager EntityManager { get; }
         public RegionManager RegionManager { get; }
         public AdminCommandManager AdminCommandManager { get; }
         public LootManager LootManager { get; }
         public GameDialogManager GameDialogManager { get; }
+        public ChatManager ChatManager { get; }
         public LiveTuningData LiveTuningData { get; private set; } = new();
 
         public TimeSpan FixedTimeBetweenUpdates { get; } = TimeSpan.FromMilliseconds(1000f / TargetFrameRate);
@@ -86,6 +89,7 @@ namespace MHServerEmu.Games
         public Dictionary<ulong, IArchiveMessageHandler> MessageHandlerDict { get; } = new();
         public bool OmegaMissionsEnabled { get; set; }
         public bool AchievementsEnabled { get; set; }
+        public bool LeaderboardsEnabled { get; set; }
         public bool InfinitySystemEnabled { get => GameOptions.InfinitySystemEnabled; }
 
         public int PlayerCount { get => EntityManager.PlayerCount; }
@@ -102,6 +106,7 @@ namespace MHServerEmu.Games
             // Initialize game options
             var config = ConfigManager.Instance.GetConfig<GameOptionsConfig>();
             AchievementsEnabled = config.AchievementsEnabled;
+            LeaderboardsEnabled = config.LeaderboardsEnabled;
             GameOptions = config.ToProtobuf();
 
             CustomGameOptions = ConfigManager.Instance.GetConfig<CustomGameOptionsConfig>();
@@ -111,10 +116,12 @@ namespace MHServerEmu.Games
 
             AdminCommandManager = new(this);
             NetworkManager = new(this);
+            ServiceMailbox = new(this);
             RegionManager = new();
             EntityManager = new(this);
             LootManager = new(this);
             GameDialogManager = new(this);
+            ChatManager = new(this);
             Random = new();
 
             Initialize();
@@ -201,6 +208,11 @@ namespace MHServerEmu.Games
         public void ReceiveMessageBuffer(IFrontendClient client, in MessageBuffer messageBuffer)
         {
             NetworkManager.AsyncReceiveMessageBuffer(client, messageBuffer);
+        }
+
+        public void ReceiveServiceMessage<T>(in T message) where T: struct, IGameServiceMessage
+        {
+            ServiceMailbox.PostMessage(message);
         }
 
         public Entity AllocateEntity(PrototypeId entityRef)
@@ -364,6 +376,10 @@ namespace MHServerEmu.Games
         {
             TimeSpan referenceTime;
             MetricsManager metrics = MetricsManager.Instance;
+
+            referenceTime = _gameTimer.Elapsed;
+            ServiceMailbox.ProcessMessages();
+            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameProcessServiceMessagesTime, _gameTimer.Elapsed - referenceTime);
 
             referenceTime = _gameTimer.Elapsed;
             GameEventScheduler.TriggerEvents(_currentGameTime);

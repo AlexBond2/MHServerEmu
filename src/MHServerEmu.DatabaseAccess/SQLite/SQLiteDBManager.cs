@@ -70,6 +70,27 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             return account != null;
         }
 
+        public bool TryGetPlayerName(ulong id, out string playerName)
+        {
+            using SQLiteConnection connection = GetConnection();
+            
+            playerName = connection.QueryFirstOrDefault<string>("SELECT PlayerName FROM Account WHERE Id = @Id", new { Id = (long)id });
+
+            return string.IsNullOrWhiteSpace(playerName) == false;
+        }
+
+        public bool GetPlayerNames(Dictionary<ulong, string> playerNames)
+        {
+            using SQLiteConnection connection = GetConnection();
+            
+            var accounts = connection.Query<DBAccount>("SELECT Id, PlayerName FROM Account");
+
+            foreach (DBAccount account in accounts)
+                playerNames[(ulong)account.Id] = account.PlayerName;
+
+            return playerNames.Count > 0;
+        }
+
         public bool QueryIsPlayerNameTaken(string playerName)
         {
             using SQLiteConnection connection = GetConnection();
@@ -392,7 +413,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             connection.Execute($"DELETE FROM {tableName} WHERE DbGuid IN ({string.Join(',', entitiesToDelete)})");
 
             // Insert and update
-            IEnumerable<DBEntity> entries = dbEntityCollection.GetEntriesForContainer(containerDbGuid);
+            IReadOnlyList<DBEntity> entries = dbEntityCollection.GetEntriesForContainer(containerDbGuid);
 
             connection.Execute(@$"INSERT OR IGNORE INTO {tableName} (DbGuid) VALUES (@DbGuid)", entries, transaction);
             connection.Execute(@$"UPDATE {tableName} SET ContainerDbGuid=@ContainerDbGuid, InventoryProtoGuid=@InventoryProtoGuid,

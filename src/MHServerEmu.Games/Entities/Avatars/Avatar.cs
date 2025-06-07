@@ -107,6 +107,7 @@ namespace MHServerEmu.Games.Entities.Avatars
 
         public AvatarModePrototype AvatarModePrototype { get => GameDatabase.GetPrototype<AvatarModePrototype>(Properties[PropertyEnum.AvatarMode]); }
         public AvatarMode AvatarMode { get => AvatarModePrototype?.AvatarModeEnum ?? AvatarMode.Invalid; }
+        public PrototypeGuid PrototypeGuid { get => GameDatabase.GetPrototypeGuid(PrototypeDataRef); }
         public Inventory ControlledInventory { get => GetInventory(InventoryConvenienceLabel.Controlled); }
         public Agent ControlledAgent { get => GetControlledAgent(); }
 
@@ -3696,6 +3697,8 @@ namespace MHServerEmu.Games.Entities.Avatars
             else if (levelDelta != 0)
             {
                 CombatLevel = Math.Clamp(CombatLevel + levelDelta, 1, GetAvatarLevelCap());
+
+                owner.ScheduleCommunityBroadcast();
             }
 
             return levelDelta;
@@ -3826,6 +3829,8 @@ namespace MHServerEmu.Games.Entities.Avatars
 
             var player = GetOwnerOfType<Player>();
             if (player == null) return false;
+
+            player.ScheduleCommunityBroadcast();
             Region?.AvatarLeveledUpEvent.Invoke(new(player, PrototypeDataRef, newLevel));
 
             return true;
@@ -5332,6 +5337,8 @@ namespace MHServerEmu.Games.Entities.Avatars
 
             ResetMissions();
 
+            player.ScheduleCommunityBroadcast();
+
             // Invoke achievement events
             PrestigeLevelPrototype prestigeLevelProto = GameDatabase.AdvancementGlobalsPrototype.GetPrestigeLevelPrototype(prestigeLevel);
             if (prestigeLevelProto == null) return Logger.WarnReturn(false, "ActivatePrestigeMode(): prestigeLevelProto == null");
@@ -5435,9 +5442,9 @@ namespace MHServerEmu.Games.Entities.Avatars
             Player player = GetOwnerOfType<Player>();
             if (player == null) return Logger.WarnReturn(false, "AwardPrestigeLoot(): player == null");
 
-            if (Game.CustomGameOptions.GrantStartingCostumeForPrestige == false)
+            if (Game.CustomGameOptions.UsePrestigeLootTable)
             {
-                // Award loot from the prestige loot table (same as BIF boxes), BUE behavior
+                // Award loot from the prestige loot table (same as BIF boxes by default), it appears this was never fully implemented
                 PrototypeId prestigeLootTableProtoRef = prestigeLevelProto.Reward;
                 if (prestigeLootTableProtoRef != PrototypeId.Invalid)
                 {
@@ -5446,15 +5453,15 @@ namespace MHServerEmu.Games.Entities.Avatars
 
                     Span<(PrototypeId, LootActionType)> tables = stackalloc (PrototypeId, LootActionType)[]
                     {
-                    (prestigeLootTableProtoRef, LootActionType.Give)
-                };
+                        (prestigeLootTableProtoRef, LootActionType.Give)
+                    };
 
                     Game.LootManager.AwardLootFromTables(tables, settings, 1);
                 }
             }
             else
             {
-                // Grant a copy of the starting costume, pre-BUE behavior
+                // Grant a copy of the starting costume, original behavior
                 GiveStartingCostume();
             }
 
@@ -5792,7 +5799,7 @@ namespace MHServerEmu.Games.Entities.Avatars
                         if (HasPowerWithKeyword(mappedPowerProto, keywordProtoRef) == false)
                             continue;
 
-                        Properties[PropertyEnum.PowerChargesMaxBonus, PrototypeDataRef] = kvp.Value;
+                        Properties[PropertyEnum.PowerChargesMaxBonus, mappedPowerProto.DataRef] = newValue;
                     }
 
                     DictionaryPool<PropertyId, PropertyValue>.Instance.Return(mappedPowerDict);

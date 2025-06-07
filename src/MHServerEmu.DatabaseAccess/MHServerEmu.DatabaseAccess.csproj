@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <AssemblyVersion>0.6.0.0</AssemblyVersion>
+    <AssemblyVersion>0.7.0.0</AssemblyVersion>
     <FileVersion>$(AssemblyVersion)</FileVersion>
     <InformationalVersion>$(AssemblyVersion)</InformationalVersion>
   </PropertyGroup>
@@ -28,6 +28,9 @@
 
   <ItemGroup>
     <None Update="Data\SQLite\InitializeDatabase.sql">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Data\SQLite\InitializeLeaderboardsDatabase.sql">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Data\SQLite\Migrations\0.sql">

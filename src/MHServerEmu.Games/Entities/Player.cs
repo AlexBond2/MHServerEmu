@@ -24,6 +24,7 @@ using MHServerEmu.Games.GameData;
 using MHServerEmu.Games.GameData.Calligraphy;
 using MHServerEmu.Games.GameData.LiveTuning;
 using MHServerEmu.Games.GameData.Prototypes;
+using MHServerEmu.Games.Leaderboards;
 using MHServerEmu.Games.GameData.Tables;
 using MHServerEmu.Games.Loot;
 using MHServerEmu.Games.Missions;
@@ -83,6 +84,7 @@ namespace MHServerEmu.Games.Entities
         private readonly EventPointer<SwitchAvatarEvent> _switchAvatarEvent = new();
         private readonly EventPointer<CheckHoursPlayedEvent> _checkHoursPlayedEvent = new();
         private readonly EventPointer<ScheduledHUDTutorialResetEvent> _hudTutorialResetEvent = new();
+        private readonly EventPointer<CommunityBroadcastEvent> _communityBroadcastEvent = new();
         private readonly EventGroup _pendingEvents = new();
 
         private ReplicatedPropertyCollection _avatarProperties = new();
@@ -129,6 +131,7 @@ namespace MHServerEmu.Games.Entities
         public GameplayOptions GameplayOptions { get; private set; } = new();
         public AchievementState AchievementState { get; private set; } = new();
         public AchievementManager AchievementManager { get; private set; }
+        public LeaderboardManager LeaderboardManager { get; private set; }
         public ScoringEventContext ScoringEventContext { get; set; }
 
         public bool IsFullscreenMoviePlaying { get => Properties[PropertyEnum.FullScreenMoviePlaying]; }
@@ -170,6 +173,7 @@ namespace MHServerEmu.Games.Entities
         {
             MissionManager = new(Game, this);
             AchievementManager = new(this);
+            LeaderboardManager = new(this);
             ScoringEventContext = new();
             GameplayOptions.SetOwner(this);
         }
@@ -192,6 +196,8 @@ namespace MHServerEmu.Games.Entities
             _community = new(this);
             _community.Initialize();
 
+            LeaderboardManager.Initialize();
+
             // Default loading screen before we start loading into a region
             QueueLoadingScreen(PrototypeId.Invalid);
 
@@ -207,9 +213,6 @@ namespace MHServerEmu.Games.Entities
             base.OnPostInit(settings);
 
             SetGiftingRestrictions();
-
-            // REMOVEME: Social tab stub
-            _community.AddMember(10, "Coming Soon", CircleId.__Friends);
         }
 
         public override void OnPropertyChange(PropertyId id, PropertyValue newValue, PropertyValue oldValue, SetPropertyFlags flags)
@@ -494,6 +497,8 @@ namespace MHServerEmu.Games.Entities
             if (region != null)
                 MissionManager.Shutdown(region);
 
+            LeaderboardManager.Destroy();
+
             base.Destroy();
         }
 
@@ -541,12 +546,24 @@ namespace MHServerEmu.Games.Entities
             CurrentAvatar?.UpdateAvatarSynergyExperienceBonus();
         }
 
+        #region Public Event Team
+
         public PrototypeId GetPublicEventTeam(PublicEventPrototype eventProto)
         {
             int eventInstance = eventProto.GetEventInstance();
             var teamProp = new PropertyId(PropertyEnum.PublicEventTeamAssignment, eventProto.DataRef, eventInstance);
             return Properties[teamProp];
         }
+
+        public PublicEventTeamPrototype GetPublicEventTeamPrototype()
+        {
+            // TODO PropertyEnum.PublicEventTeamAssignment
+            // GetPublicEventTeam(ActivePublicEvent).As<PublicEventTeamPrototype>()
+            //return ((PrototypeId)12697619663363773645).As<PublicEventTeamPrototype>();  // Events/PublicEvents/Teams/CivilWarAntiReg.prototype
+            return null;
+        }
+
+        #endregion
 
         #region Region
 
@@ -1492,6 +1509,8 @@ namespace MHServerEmu.Games.Entities
             EnableCurrentAvatar(true, lastCurrentAvatarId, prevRegionId, prevPosition, prevOrientation);
 
             IsSwitchingAvatar = false;
+
+            ScheduleCommunityBroadcast();
 
             GetRegion()?.PlayerSwitchedToAvatarEvent.Invoke(new(this, avatarProtoRef));
 
@@ -2725,12 +2744,14 @@ namespace MHServerEmu.Games.Entities
         public void OnScoringEvent(in ScoringEvent scoringEvent, ulong entityId = Entity.InvalidId)
         {
             AchievementManager.OnScoringEvent(scoringEvent, entityId);
+            LeaderboardManager.OnScoringEvent(scoringEvent, entityId);
         }
 
         public void UpdateScoringEventContext()
         {
             ScoringEventContext = new(this);
             AchievementManager.OnUpdateEventContext();
+            LeaderboardManager.OnUpdateEventContext();
         }
 
         #endregion
@@ -2815,6 +2836,13 @@ namespace MHServerEmu.Games.Entities
             }
 
             _newPlayerUISystemsUnlocked = true;
+        }
+
+        public bool HasFinishedTutorial()
+        {
+            // HACK: Chat unlocks when the player finishes the tutorial in 1.52, so this can be used to check tutorial completion.
+            // We unlock chat by default for accounts with elevated privileges, so they effectively always have the tutorial completed.
+            return Properties[PropertyEnum.UISystemLock, UIGlobalsPrototype.ChatSystemLock];
         }
 
         public void UpdateUISystemLocks()
@@ -3006,6 +3034,58 @@ namespace MHServerEmu.Games.Entities
 
         #endregion
 
+        #region Communities
+
+        // Community update broadcasts are done via scheduled events to avoid multiple broadcasts at once.
+
+        public void ScheduleCommunityBroadcast()
+        {
+            if (_communityBroadcastEvent.IsValid)
+                return;
+
+            Game.GameEventScheduler.ScheduleEvent(_communityBroadcastEvent, TimeSpan.Zero, _pendingEvents);
+            _communityBroadcastEvent.Get().Initialize(this);
+        }
+
+        public CommunityMemberBroadcast BuildCommunityBroadcast()
+        {
+            Region region = GetRegion();
+            Avatar avatar = CurrentAvatar;
+
+            return CommunityMemberBroadcast.CreateBuilder()
+                .SetMemberPlayerDbId(DatabaseUniqueId)
+                .SetCurrentRegionRefId(region != null ? (ulong)region.PrototypeDataRef : 0)
+                .SetCurrentDifficultyRefId(region != null ? (ulong)region.DifficultyTierRef : 0)
+                .AddSlots(CommunityMemberAvatarSlot.CreateBuilder()
+                    .SetAvatarRefId(avatar != null ? (ulong)avatar.PrototypeDataRef : 0)
+                    .SetCostumeRefId(avatar != null ? (ulong)avatar.EquippedCostumeRef : 0)
+                    .SetLevel(avatar != null ? (uint)avatar.CharacterLevel : 0)
+                    .SetPrestigeLevel(avatar != null ? (uint)avatar.PrestigeLevel : 0))
+                .SetCurrentPlayerName(GetName())
+                .SetIsOnline(1)
+                .Build();
+        }
+
+        private void DoCommunityBroadcast()
+        {
+            // TODO: Send a broadcast message to the player manager to update other game instances
+
+            // Update players in this game instance
+            foreach (Player otherPlayer in new PlayerIterator(Game))
+            {
+                Community community = otherPlayer.Community;
+                CommunityMember member = community.GetMember(DatabaseUniqueId);
+
+                // Skip communities that don't have this player as a member
+                if (member == null)
+                    continue;
+
+                community.RequestLocalBroadcast(member);
+            }
+        }
+
+        #endregion
+
         #region Scheduled Events
 
         private class ScheduledHUDTutorialResetEvent : CallMethodEvent<Entity>
@@ -3026,6 +3106,11 @@ namespace MHServerEmu.Games.Entities
         private class MoveToTargetEvent : CallMethodEventParam1<Entity, PrototypeId>
         {
             protected override CallbackDelegate GetCallback() => (t, p1) => ((Player)t).PlayerConnection.MoveToTarget(p1);
+        }
+
+        private class CommunityBroadcastEvent : CallMethodEvent<Entity>
+        {
+            protected override CallbackDelegate GetCallback() => (t) => ((Player)t).DoCommunityBroadcast();
         }
 
         #endregion

@@ -1,4 +1,5 @@
-﻿using Gazillion;
+﻿using System.Diagnostics;
+using Gazillion;
 using Google.ProtocolBuffers;
 using MHServerEmu.Core.Config;
 using MHServerEmu.Core.Extensions;
@@ -21,6 +22,7 @@ using MHServerEmu.Games.Entities.Persistence;
 using MHServerEmu.Games.Events;
 using MHServerEmu.Games.GameData;
 using MHServerEmu.Games.GameData.Prototypes;
+using MHServerEmu.Games.Leaderboards;
 using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.MTXStore;
 using MHServerEmu.Games.Powers;
@@ -80,7 +82,7 @@ namespace MHServerEmu.Games.Network
 
         public override string ToString()
         {
-            return $"dbGuid=0x{PlayerDbId:X}";
+            return _dbAccount.ToString();
         }
 
         public bool Initialize()
@@ -181,9 +183,9 @@ namespace MHServerEmu.Games.Network
                 Player.InitializeMissionTrackerFilters();
                 Logger.Trace($"Initialized default mission filters for {Player}");
 
-                // Unlock chat by default for accounts with elevated permissions to allow them to use chat commands during the tutorial
+                // HACK: Unlock chat by default for accounts with elevated permissions to allow them to use chat commands during the tutorial
                 if (_dbAccount.UserLevel > AccountUserLevel.User)
-                    Player.Properties[PropertyEnum.UISystemLock, (PrototypeId)809347018162704299] = 1;
+                    Player.Properties[PropertyEnum.UISystemLock, UIGlobalsPrototype.ChatSystemLock] = 1;
             }
 
             PersistenceHelper.RestoreInventoryEntities(Player, _dbAccount);
@@ -258,7 +260,7 @@ namespace MHServerEmu.Games.Network
 
             AOI.SetRegion(0, true);
 
-            Game.EntityManager.DestroyEntity(Player);
+            Player?.Destroy();
 
             // Destroy all private region instances in the world view since they are not persistent anyway
             foreach (var kvp in WorldView)
@@ -320,6 +322,9 @@ namespace MHServerEmu.Games.Network
                 Player.AchievementManager.RecountAchievements();
                 Player.AchievementManager.UpdateScore();
 
+                // Recount Leaderboards context
+                Player.LeaderboardManager.RecountPlayerContext();
+
                 // Notify the client
                 SendMessage(NetMessageReadyAndLoadedOnGameServer.DefaultInstance);
 
@@ -361,12 +366,15 @@ namespace MHServerEmu.Games.Network
             Player.GetMapDiscoveryData(region.Id)?.LoadPlayerDiscovered(Player);
 
             Player.SendFullscreenMovieSync();
+
+            Player.ScheduleCommunityBroadcast();
         }
 
         public void ExitGame()
         {
             // We need to recreate the player entity when we transfer between regions because client UI breaks
             // when we reuse the same player entity id (e.g. inventory grid stops updating).
+            Stopwatch stopwatch = Stopwatch.StartNew();
             
             // Player entity exiting the game removes it from its AOI and also removes the current avatar from the world.
             Player.ExitGame();
@@ -381,6 +389,10 @@ namespace MHServerEmu.Games.Network
 
             // Recreate player
             LoadFromDBAccount();
+
+            stopwatch.Stop();
+            if (stopwatch.Elapsed > TimeSpan.FromMilliseconds(300))
+                Logger.Warn($"ExitGame() took {stopwatch.Elapsed.TotalMilliseconds} ms for {this}");
         }
 
         #endregion
@@ -442,6 +454,10 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageRequestRemoveAndKillControlledAgent:   OnRequestRemoveAndKillControlledAgent(message); break;   // 58
                 case ClientToGameServerMessage.NetMessageDamageMeter:                       OnDamageMeter(message); break;                      // 59
                 case ClientToGameServerMessage.NetMessageMetaGameUpdateNotification:        OnMetaGameUpdateNotification(message); break;       // 63
+                case ClientToGameServerMessage.NetMessageChat:                              OnChat(message); break;                             // 64
+                case ClientToGameServerMessage.NetMessageTell:                              OnTell(message); break;                             // 65
+                case ClientToGameServerMessage.NetMessageReportPlayer:                      OnReportPlayer(message); break;                     // 66
+                case ClientToGameServerMessage.NetMessageChatBanVote:                       OnChatBanVote(message); break;                      // 67
                 case ClientToGameServerMessage.NetMessagePurchaseUnlock:                    OnPurchaseUnlock(message); break;                   // 72
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieStarted:      OnNotifyFullscreenMovieStarted(message); break;     // 84
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieFinished:     OnNotifyFullscreenMovieFinished(message); break;    // 85
@@ -454,6 +470,7 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageVendorRequestSellItemTo:           OnVendorRequestSellItemTo(message); break;          // 103
                 case ClientToGameServerMessage.NetMessageVendorRequestDonateItemTo:         OnVendorRequestDonateItemTo(message); break;        // 104
                 case ClientToGameServerMessage.NetMessageVendorRequestRefresh:              OnVendorRequestRefresh(message); break;             // 105
+                case ClientToGameServerMessage.NetMessageTryModifyCommunityMemberCircle:    OnTryModifyCommunityMemberCircle(message); break;   // 106
                 case ClientToGameServerMessage.NetMessagePullCommunityStatus:               OnPullCommunityStatus(message); break;              // 107
                 case ClientToGameServerMessage.NetMessageAkEvent:                           OnAkEvent(message); break;                          // 109
                 case ClientToGameServerMessage.NetMessageSetTipSeen:                        OnSetTipSeen(message); break;                       // 110
@@ -486,17 +503,10 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageWidgetButtonResult:                OnWidgetButtonResult(message); break;               // 154
                 case ClientToGameServerMessage.NetMessageStashTabInsert:                    OnStashTabInsert(message); break;                   // 155
                 case ClientToGameServerMessage.NetMessageStashTabOptions:                   OnStashTabOptions(message); break;                  // 156
+                case ClientToGameServerMessage.NetMessageLeaderboardRequest:                OnLeaderboardRequest(message); break;               // 157
+                case ClientToGameServerMessage.NetMessageLeaderboardInitializeRequest:      OnLeaderboardInitializeRequest(message); break;     // 159
                 case ClientToGameServerMessage.NetMessageMissionTrackerFiltersUpdate:           OnMissionTrackerFiltersUpdate(message); break;              // 166
                 case ClientToGameServerMessage.NetMessageAchievementMissionTrackerFilterChange: OnAchievementMissionTrackerFilterChange(message); break;    // 167
-
-                // Grouping Manager
-                case ClientToGameServerMessage.NetMessageChat:                                                                                  // 64
-                case ClientToGameServerMessage.NetMessageTell:                                                                                  // 65
-                case ClientToGameServerMessage.NetMessageReportPlayer:                                                                          // 66
-                case ClientToGameServerMessage.NetMessageChatBanVote:                                                                           // 67
-                case ClientToGameServerMessage.NetMessageTryModifyCommunityMemberCircle:                                                        // 106, TODO: handle this in game
-                    RouteMessageToService(ServerType.GroupingManager, message);
-                    break;
 
                 // Billing
                 case ClientToGameServerMessage.NetMessageGetCatalog:                                                                            // 68
@@ -505,13 +515,6 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageBuyGiftForOtherPlayer:                                                                 // 71
                 case ClientToGameServerMessage.NetMessageGetGiftHistory:                                                                        // 73
                     RouteMessageToService(ServerType.Billing, message);
-                    break;
-
-                // Leaderboards
-                case ClientToGameServerMessage.NetMessageLeaderboardRequest:                                                                    // 157
-                case ClientToGameServerMessage.NetMessageLeaderboardArchivedInstanceListRequest:                                                // 158
-                case ClientToGameServerMessage.NetMessageLeaderboardInitializeRequest:                                                          // 159
-                    RouteMessageToService(ServerType.Leaderboard, message);
                     break;
 
                 default: Logger.Warn($"ReceiveMessage(): Unhandled {(ClientToGameServerMessage)message.Id} [{message.Id}]"); break;
@@ -1264,6 +1267,42 @@ namespace MHServerEmu.Games.Network
             return true;
         }
 
+        private bool OnChat(in MailboxMessage message)  // 64
+        {
+            var chat = message.As<NetMessageChat>();
+            if (chat == null) return Logger.WarnReturn(false, $"OnChat(): Failed to retrieve message");
+
+            Game.ChatManager.HandleChat(Player, chat);
+            return true;
+        }
+
+        private bool OnTell(in MailboxMessage message)  // 65
+        {
+            var tell = message.As<NetMessageTell>();
+            if (tell == null) return Logger.WarnReturn(false, $"OnTell(): Failed to retrieve message");
+
+            Game.ChatManager.HandleTell(Player, tell);
+            return true;
+        }
+
+        private bool OnReportPlayer(in MailboxMessage message)  // 66
+        {
+            var reportPlayer = message.As<NetMessageReportPlayer>();
+            if (reportPlayer == null) return Logger.WarnReturn(false, $"OnReportPlayer(): Failed to retrieve message");
+
+            Game.ChatManager.HandleReportPlayer(Player, reportPlayer);
+            return true;
+        }
+
+        private bool OnChatBanVote(in MailboxMessage message)   // 67
+        {
+            var chatBanVote = message.As<NetMessageChatBanVote>();
+            if (chatBanVote == null) return Logger.WarnReturn(false, $"OnChatBanVote(): Failed to retrieve message");
+
+            Game.ChatManager.HandleChatBanVote(Player, chatBanVote);
+            return true;
+        }
+
         private bool OnPurchaseUnlock(MailboxMessage message)   // 72
         {
             var purchaseUnlock = message.As<NetMessagePurchaseUnlock>();
@@ -1375,6 +1414,16 @@ namespace MHServerEmu.Games.Network
             if (vendorRequestRefresh == null) return Logger.WarnReturn(false, $"OnVendorRequestRefresh(): Failed to retrieve message");
 
             Player?.RefreshVendorInventory(vendorRequestRefresh.VendorId);
+            return true;
+        }
+
+        private bool OnTryModifyCommunityMemberCircle(in MailboxMessage message)   // 106
+        {
+            var tryModifyCommunityMemberCircle = message.As<NetMessageTryModifyCommunityMemberCircle>();
+            if (tryModifyCommunityMemberCircle == null) return Logger.WarnReturn(false, $"OnTryModifyCommunityMemberCircle(): Failed to retrieve message");
+
+            // TODO, send a Service Unavailable message for now
+            Game.ChatManager.SendChatFromGameSystem((LocaleStringId)5066146868144571696, Player);
             return true;
         }
 
@@ -1917,6 +1966,27 @@ namespace MHServerEmu.Games.Network
             if (stashTabOptions == null) return Logger.WarnReturn(false, $"OnStashTabOptions(): Failed to retrieve message");
 
             return Player.UpdateStashTabOptions(stashTabOptions);
+        }
+
+        private bool OnLeaderboardRequest(MailboxMessage message)   // 157
+        {
+            // Leaderboard details are not cached in games, so route this request to the leaderboard service.
+            RouteMessageToService(ServerType.Leaderboard, message);
+            return true;
+        }
+
+        // NOTE: Doesn't seem like the client ever sends NetMessageLeaderboardArchivedInstanceListRequest (at least in 1.52)
+
+        private bool OnLeaderboardInitializeRequest(MailboxMessage message) // 159
+        {
+            var initializeRequest = message.As<NetMessageLeaderboardInitializeRequest>();
+            if (initializeRequest == null) return Logger.WarnReturn(false, $"OnLeaderboardInitializeRequest(): Failed to retrieve message");
+
+            // All the data with need to handle initialize requests is cached in games, so no need to use the leaderboard service here.
+            var response = LeaderboardInfoCache.Instance.BuildInitializeRequestResponse(initializeRequest);
+            SendMessage(response);
+
+            return true;
         }
 
         private bool OnMissionTrackerFiltersUpdate(MailboxMessage message)  // 166

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Diagnostics;
+using System.Text;
 using Gazillion;
 using MHServerEmu.Core.Collisions;
 using MHServerEmu.Core.Extensions;
@@ -1693,6 +1694,20 @@ namespace MHServerEmu.Games.Entities
             return success;
         }
 
+        public bool ApplyDamageTransferPowerResults(PowerResults powerResults)
+        {
+            // Applies power results without extra stuff (e.g. checking procs)
+
+            // Send power results to clients
+            if (powerResults.ShouldSendToClient())
+            {
+                NetMessagePowerResult powerResultMessage = ArchiveMessageBuilder.BuildPowerResultMessage(powerResults);
+                Game.NetworkManager.SendMessageToInterested(powerResultMessage, this, AOINetworkPolicyValues.AOIChannelProximity);
+            }
+
+            return ApplyPowerResultsInternal(powerResults);
+        }
+
         private bool TriggerOnHitEffects(PowerResults powerResults, WorldEntity powerOwner)
         {
             // powerOwner has been null checked above in ApplyPowerResults()
@@ -2153,7 +2168,7 @@ namespace MHServerEmu.Games.Entities
                         playerUid = tag.PlayerUID;
                     }
 
-                    if (isCombatActive &&  tag.PowerPrototype != null && tag.Time >= powerTime)
+                    if (isCombatActive && tag.PowerPrototype != null && tag.Time >= powerTime)
                         player.OnScoringEvent(new(ScoringEventType.EntityDeathViaPower, Prototype, tag.PowerPrototype, GetRankPrototype()), Id);
                 }
             }
@@ -3386,7 +3401,7 @@ namespace MHServerEmu.Games.Entities
                     {
                         long oldHealthMax = oldValue;
                         float ratio = Math.Min(MathHelper.Ratio(health, oldHealthMax), 1f);
-                        long newHealth = MathHelper.RoundToInt64((long)newValue * ratio);
+                        long newHealth = Math.Max(MathHelper.RoundToInt64((long)newValue * ratio), 1);  // Do not allow health to go to 0 here
 
                         Properties[PropertyEnum.Health] = newHealth;
                     }
@@ -4519,7 +4534,6 @@ namespace MHServerEmu.Games.Entities
         {
             protected override CallbackDelegate GetCallback() => (t, p1) => ((WorldEntity)t).AwardInteractionLoot(p1);
         }
-
 
         #endregion
     }
