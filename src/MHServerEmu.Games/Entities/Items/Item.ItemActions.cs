@@ -103,11 +103,23 @@ namespace MHServerEmu.Games.Entities.Items
                     break;
 
                 case ItemActionType.AwardTeamUpXP:
-                    wasUsed |= DoItemActionAwardTeamUpXP();
+                    if (actionProto is not ItemActionAwardTeamUpXPPrototype awardTeamUpXPProto)
+                    {
+                        Logger.Warn("TriggerItemActionOnUse(): actionProto is not ItemActionAwardTeamUpXPPrototype awardTeamUpXPProto");
+                        return;
+                    }
+
+                    wasUsed |= DoItemActionAwardTeamUpXP(avatar, awardTeamUpXPProto.XP);
                     break;
 
                 case ItemActionType.OpenUIPanel:
-                    wasUsed |= DoItemActionOpenUIPanel();
+                    if (actionProto is not ItemActionOpenUIPanelPrototype openUIPanelProto)
+                    {
+                        Logger.Warn("TriggerItemActionOnUse(): actionProto is not ItemActionOpenUIPanelPrototype openUIPanelProto");
+                        return;
+                    }
+
+                    wasUsed |= DoItemActionOpenUIPanel(player, openUIPanelProto.PanelName);
                     break;
             }
         }
@@ -261,16 +273,19 @@ namespace MHServerEmu.Games.Entities.Items
             return avatar.ActivatePower(powerProtoRef, ref settings) == PowerUseResult.Success;
         }
 
-        private bool DoItemActionAwardTeamUpXP()
+        private bool DoItemActionAwardTeamUpXP(Avatar avatar, int amount)
         {
-            Logger.Debug($"DoItemActionAwardTeamUpXP(): {this}");
-            return false;
+            Agent teamUpAgent = avatar.CurrentTeamUpAgent;
+            if (teamUpAgent == null)
+                return false;
+
+            teamUpAgent.AwardXP(amount, 0, true);
+            return true;
         }
 
-        private bool DoItemActionOpenUIPanel()
+        private bool DoItemActionOpenUIPanel(Player player, AssetId panelNameId)
         {
-            Logger.Debug($"DoItemActionOpenUIPanel(): {this}");
-            return false;
+            return player.SendOpenUIPanel(panelNameId);
         }
 
         private bool ReplaceSelfHelper(LootResultSummary lootResultSummary, Player player, NetMessageLootRewardReport.Builder reportBuilder)
@@ -294,6 +309,18 @@ namespace MHServerEmu.Games.Entities.Items
 
             Inventory deliveryBox = player.GetInventory(InventoryConvenienceLabel.DeliveryBox);
             if (deliveryBox == null) return Logger.WarnReturn(false, "ReplaceSelfHelper(): deliveryBox == null");
+
+            // Try to avoid delivery box overflow because people can abuse it to hoard loot and cause performance issues
+            int itemCount = lootResultSummary.ItemSpecs.Count;
+            if (itemCount > 1 && inventory.Count + itemCount >= inventory.MaxCapacity)
+            {
+                player.SendMessage(NetMessageInventoryFull.CreateBuilder()
+                    .SetPlayerID(player.Id)
+                    .SetItemID(InvalidId)
+                    .Build());
+
+                return false;
+            }
 
             // If this is the last item in the stack, move it out of the inventory while we try to replace it
             InventoryLocation oldInvLoc = new(InventoryLocation);

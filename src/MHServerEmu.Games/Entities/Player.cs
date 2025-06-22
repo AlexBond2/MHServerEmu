@@ -153,7 +153,6 @@ namespace MHServerEmu.Games.Entities
         public bool IsUsingUnifiedStash { get => IsConsolePlayer || IsConsoleUI; }
 
         public bool IsInParty { get; internal set; }
-        public static bool IsPlayerTradeEnabled { get; internal set; }
         public Avatar PrimaryAvatar { get => CurrentAvatar; } // Fix for PC
         public Avatar SecondaryAvatar { get; private set; }
         public int CurrentAvatarCharacterLevel { get => PrimaryAvatar?.CharacterLevel ?? 0; }
@@ -168,6 +167,9 @@ namespace MHServerEmu.Games.Entities
         public long GazillioniteBalance { get => PlayerConnection.GazillioniteBalance; set => PlayerConnection.GazillioniteBalance = value; }
         public int PowerSpecIndexUnlocked { get => Properties[PropertyEnum.PowerSpecIndexUnlocked]; }
         public ulong TeamUpSynergyConditionId { get; set; }
+
+        public static bool IsPlayerTradeEnabled { get; internal set; }
+        public PlayerTradeStatusCode PlayerTradeStatusCode { get; private set; } = PlayerTradeStatusCode.ePTSC_None;
 
         public Player(Game game) : base(game)
         {
@@ -918,6 +920,43 @@ namespace MHServerEmu.Games.Entities
                 }
             }
 
+            // Update vendor inventories if we are adding a recipe
+            if (invLoc.InventoryConvenienceLabel == InventoryConvenienceLabel.CraftingRecipesLearned)
+            {
+                List<VendorTypePrototype> vendorsToUpdate = ListPool<VendorTypePrototype>.Instance.Get();
+
+                foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.VendorLevel))
+                {
+                    Property.FromParam(kvp.Key, 0, out PrototypeId vendorTypeProtoRef);
+                    VendorTypePrototype vendorTypeProto = vendorTypeProtoRef.As<VendorTypePrototype>();
+                    if (vendorTypeProto == null)
+                    {
+                        Logger.Warn("OnOtherEntityAddedToMyInventory(): vendorTypeProto == null");
+                        continue;
+                    }
+
+                    if (vendorTypeProto.IsCrafter == false)
+                        continue;
+
+                    vendorsToUpdate.Add(vendorTypeProto);
+                }
+
+                foreach (VendorTypePrototype vendorTypeProto in vendorsToUpdate)
+                    RollVendorInventory(vendorTypeProto, false);
+
+                ListPool<VendorTypePrototype>.Instance.Return(vendorsToUpdate);
+            }
+
+            // Adjust available ingredients for auto populated inputs
+            if (unpackedArchivedEntity == false)
+                AdjustCraftingIngredientAvailable(item.PrototypeDataRef, item.CurrentStackSize, category);
+
+            // Trigger item collection event
+            InventoryPrototype inventoryProto = invLoc.InventoryPrototype;
+            int stackSize = item.CurrentStackSize;
+            if (stackSize > 0 && inventoryProto != null && (inventoryProto.IsPlayerGeneralInventory || inventoryProto.IsEquipmentInventory))
+                GetRegion()?.PlayerCollectedItemEvent.Invoke(new(this, item, stackSize));
+
             // Highlight items that get put into stash tabs different from the current one
             if (invLoc.InventoryRef != CurrentOpenStashPagePrototypeRef &&
                 (category == InventoryCategory.PlayerStashGeneral ||
@@ -961,6 +1000,119 @@ namespace MHServerEmu.Games.Entities
                     }
                 }
             }
+
+            // Trigger item loss event
+            InventoryPrototype inventoryProto = invLoc.InventoryPrototype;
+            int stackSize = item.CurrentStackSize;
+            if (stackSize > 0 && inventoryProto != null && (inventoryProto.IsPlayerGeneralInventory || inventoryProto.IsEquipmentInventory))
+                GetRegion()?.PlayerLostItemEvent.Invoke(new(this, item, -stackSize));
+
+            // Adjust available ingredients for auto populated inputs
+            AdjustCraftingIngredientAvailable(item.PrototypeDataRef, -item.CurrentStackSize, category);
+        }
+
+        public bool TryInventoryMove(ulong itemId, ulong containerId, PrototypeId inventoryProtoRef, uint slot)
+        {
+            // NOTE: This is sensitive code, because it's a prime target for potential cheaters,
+            // while also having common enough valid failure cases due to lag.
+            Item item = Game.EntityManager.GetEntity<Item>(itemId);
+            if (item == null)
+                return false;
+
+            Entity container = Game.EntityManager.GetEntity<Entity>(containerId);
+            if (container == null)
+                return false;
+
+            // Validate ownership
+            Player itemOwner = item.GetOwnerOfType<Player>();
+            if (itemOwner != null && itemOwner != this)
+                return Logger.WarnReturn(false, $"TryInventoryMove(): Player [{this}] is attempting to move item [{item}] owned by another player [{itemOwner}]");
+
+            Player containerOwner = container.GetOwnerOfType<Player>();
+            if (containerOwner != null && containerOwner != this)
+                return Logger.WarnReturn(false, $"TryInventoryMove(): Player [{this}] is attempting to move item [{item}] to container [{container}] owned by another player [{containerOwner}]");
+
+            if (itemOwner == null && containerOwner == null)
+                return Logger.WarnReturn(false, $"TryInventoryMove(): Player [{this}] is attempting to move item [{item}] to container [{container}], and neither of them is owned by this player");
+
+            // Validate inventory
+            Inventory inventory = container.GetInventoryByRef(inventoryProtoRef);
+            if (inventory == null) return Logger.WarnReturn(false, "TryInventoryMove(): inventory == null");
+
+            // Check if the destination inventory is full if we don't have a specific slot
+            if (slot == Inventory.InvalidSlot)
+            {
+                bool isAdding = inventory.PrototypeDataRef != item.InventoryLocation.InventoryRef;
+                slot = inventory.GetFreeSlot(item, true, isAdding);
+                if (slot == Inventory.InvalidSlot)
+                {
+                    SendMessage(NetMessageInventoryFull.CreateBuilder()
+                        .SetPlayerID(Id)
+                        .SetItemID(InvalidId)
+                        .Build());
+
+                    return false;
+                }
+            }
+
+            // Repeat PlayerCanMove validation done by the client
+            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);   // <-- This is heap allocated, which is not great. TODO: pooling?
+            if (item.PlayerCanMove(this, invLoc, out InventoryResult canMoveResult, out PropertyEnum canMoveResultProperty, out _) == false)
+                return Logger.WarnReturn(false, $"TryInventoryMove(): PlayerCanMove check failed, player=[{this}], item={item}, canMoveResult={canMoveResult}, canMoveResultProperty=[{canMoveResultProperty}]");
+
+            // Move
+            ulong? stackEntityId = InvalidId;
+            InventoryResult result = item.ChangeInventoryLocation(inventory, slot, ref stackEntityId, true);
+
+            if (result == InventoryResult.Success && inventory.IsEquipment)
+            {
+                // The original item may have been destroyed by stacking with another item (e.g. equipping relics)
+                Item eventItem = stackEntityId != InvalidId ? Game.EntityManager.GetEntity<Item>(stackEntityId.Value) : item;
+                GetRegion()?.PlayerEquippedItemEvent.Invoke(new(this, eventItem));
+            }
+
+            // TODO: Log inventory movements to a separate file?
+            //Logger.Trace($"TryInventoryMove(): [{item}] to container=[{container}], inventory=[{inventory}], slot=[{slot}]");
+
+            return true;
+        }
+
+        public bool TryInventoryStackSplit(ulong itemId, ulong containerId, PrototypeId inventoryProtoRef, uint slot)
+        {
+            Item item = Game.EntityManager.GetEntity<Item>(itemId);
+            if (item == null)
+                return false;
+
+            Entity container = Game.EntityManager.GetEntity<Entity>(containerId);
+            if (container == null)
+                return false;
+
+            // Validate ownership
+            Player itemOwner = item.GetOwnerOfType<Player>();
+            if (itemOwner != this)
+                return Logger.WarnReturn(false, $"TryInventoryStackSplit(): Player [{this}] is attempting to split stack [{item}] owned by another player [{itemOwner}]");
+
+            Player containerOwner = container.GetOwnerOfType<Player>();
+            if (container != this && containerOwner != this)
+                return Logger.WarnReturn(false, $"TryInventoryStackSplit(): Player [{this}] is attempting to split stack [{item}] to container [{container}] owned by another player [{containerOwner}]");
+
+            // Validate inventory
+            Inventory inventory = container.GetInventoryByRef(inventoryProtoRef);
+            if (inventory == null) return Logger.WarnReturn(false, "TryInventoryStackSplit(): inventory == null");
+
+            // Do the split
+            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);   // <-- This is heap allocated, which is not great. TODO: pooling?
+            InventoryResult result = item.SplitStack(invLoc, 1);
+
+            if (result == InventoryResult.InventoryFull)
+            {
+                SendMessage(NetMessageInventoryFull.CreateBuilder()
+                    .SetPlayerID(Id)
+                    .SetItemID(InvalidId)
+                    .Build());
+            }
+
+            return result == InventoryResult.Success;
         }
 
         public bool TrashItem(Item item)
@@ -1209,6 +1361,110 @@ namespace MHServerEmu.Games.Entities
             
             CurrentAvatar?.InitPowerFromCreationItem(item);
             return true;
+        }
+
+        public InventoryResult ValidatePlayerInventoryMoveConstraints(InventoryLocation fromInvLoc, InventoryLocation toInvLoc)
+        {
+            InventoryResult result = ValidatePlayerCanMoveDirectlyOutOfInventory(fromInvLoc);
+            if (result != InventoryResult.Success)
+                return result;
+
+            return ValidatePlayerCanMoveDirectlyIntoInventory(toInvLoc);
+        }
+
+        public InventoryResult ValidatePlayerCanMoveDirectlyOutOfInventory(InventoryLocation fromInvLoc)
+        {
+            if (fromInvLoc.InventoryConvenienceLabel == InventoryConvenienceLabel.CraftingResults)
+            {
+                // CraftingResults inventory is available only when interacting with a crafter
+                WorldEntity dialogTarget = GetDialogTarget();
+                if (dialogTarget == null || dialogTarget.IsCrafter == false)
+                    return InventoryResult.InvalidNotInteractingWithCrafter;
+
+                return InventoryResult.Success;
+            }
+
+            switch (fromInvLoc.InventoryCategory)
+            {
+                case InventoryCategory.PlayerStashAvatarSpecific:
+                case InventoryCategory.PlayerStashGeneral:
+                {
+                    // PlayerStash inventories are available only when interacting with a stash
+                    WorldEntity dialogTarget = GetDialogTarget();
+                    if (dialogTarget == null || dialogTarget.IsStash == false)
+                        return InventoryResult.InvalidNotInteractingWithStash;
+
+                    return InventoryResult.Success;
+                }
+
+                case InventoryCategory.PlayerTrade:
+                    // PlayerTrade inventory is available only when trading
+                    if (PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_SentInvitation && PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_TradeInProgress)
+                        return InventoryResult.InvalidNotTrading;
+
+                    return InventoryResult.Success;
+
+                // These categories are always okay to move out of
+                case InventoryCategory.AvatarEquipment:
+                case InventoryCategory.BagItem:
+                case InventoryCategory.PlayerAdmin:
+                case InventoryCategory.PlayerGeneral:
+                case InventoryCategory.PlayerGeneralExtra:
+                case InventoryCategory.PlayerStashTeamUpGear:
+                case InventoryCategory.TeamUpEquipment:
+                    return InventoryResult.Success;
+            }
+
+            // Players are not allowed to move entities out of inventories not covered by the switch statement above
+            return InventoryResult.InvalidPlayerCannotMoveOutOfThisInventory;
+        }
+
+        public InventoryResult ValidatePlayerCanMoveDirectlyIntoInventory(InventoryLocation toInvLoc)
+        {
+            switch (toInvLoc.InventoryCategory)
+            {
+                case InventoryCategory.BagItem:
+                    Item bagItem = Game.EntityManager.GetEntity<Item>(toInvLoc.ContainerId);
+                    BagItemPrototype bagItemProto = bagItem?.Prototype as BagItemPrototype;
+                    if (bagItemProto != null)
+                    {
+                        if (bagItemProto.AllowsPlayerAdds == false)
+                            return InventoryResult.InvalidBagItemPreventsPlayerAdds;
+
+                        return InventoryResult.Success;
+                    }
+
+                    break;
+
+                case InventoryCategory.PlayerStashAvatarSpecific:
+                case InventoryCategory.PlayerStashGeneral:
+                {
+                    // PlayerStash inventories are available only when interacting with a stash
+                    WorldEntity dialogTarget = GetDialogTarget();
+                    if (dialogTarget == null || dialogTarget.IsStash == false)
+                        return InventoryResult.InvalidNotInteractingWithStash;
+
+                    return InventoryResult.Success;
+                }
+
+                case InventoryCategory.PlayerTrade:
+                    // PlayerTrade inventory is available only when trading
+                    if (PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_SentInvitation && PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_TradeInProgress)
+                        return InventoryResult.InvalidNotTrading;
+
+                    return InventoryResult.Success;
+
+                // These categories are always okay to move into
+                case InventoryCategory.AvatarEquipment:
+                case InventoryCategory.PlayerGeneral:
+                case InventoryCategory.PlayerGeneralExtra:
+                case InventoryCategory.PlayerStashTeamUpGear:
+                case InventoryCategory.TeamUpEquipment:
+                    return InventoryResult.Success;
+            }
+
+            // Players are not allowed to move entities into inventories not covered by the switch statement above
+            return InventoryResult.InvalidPlayerCannotMoveIntoThisInventory;
         }
 
         protected override bool InitInventories(bool populateInventories)
@@ -1703,6 +1959,37 @@ namespace MHServerEmu.Games.Entities
             return HasAvatarAsStarter(avatar.PrototypeDataRef) && avatar.CharacterLevel >= Avatar.GetStarterAvatarLevelCap();
         }
 
+        public bool HasAvatarEmoteUnlocked(PrototypeId avatarProtoRef, PrototypeId emoteProtoRef)
+        {
+            return Properties.HasProperty(new PropertyId(PropertyEnum.AvatarEmoteUnlocked, avatarProtoRef, emoteProtoRef));
+        }
+
+        public bool UnlockAvatarEmote(PrototypeId avatarProtoRef, PrototypeId emoteProtoRef)
+        {
+            AvatarPrototype avatarProto = avatarProtoRef.As<AvatarPrototype>();
+            if (avatarProto == null) return Logger.WarnReturn(false, "UnlockAvatarEmote(): avatarProto == null");
+
+            PowerPrototype emoteProto = emoteProtoRef.As<PowerPrototype>();
+            if (emoteProto == null) return Logger.WarnReturn(false, "UnlockAvatarEmote(): emoteProto == null");
+            if (emoteProto.PowerCategory != PowerCategoryType.EmotePower) return Logger.WarnReturn(false, "UnlockAvatarEmote(): emoteProto.PowerCategory != PowerCategoryType.EmotePower");
+
+            if (HasAvatarEmoteUnlocked(avatarProtoRef, emoteProtoRef))
+                return Logger.WarnReturn(false, $"UnlockAvatarEmote(): Player [{this}] is attempting to unlock emote {emoteProtoRef.GetNameFormatted()} for {avatarProtoRef.GetNameFormatted()} that is already unlocked");
+
+            Properties[PropertyEnum.AvatarEmoteUnlocked, avatarProtoRef, emoteProtoRef] = true;
+
+            // Assign the newly unlocked emote power if needed
+            Avatar avatar = CurrentAvatar;
+            if (avatar != null && avatar.PrototypeDataRef == avatarProtoRef && avatar.IsInWorld && avatar.GetPower(emoteProtoRef) == null)
+            {
+                PowerIndexProperties indexProps = new(0, avatar.CharacterLevel, avatar.CombatLevel);
+                if (avatar.AssignPower(emoteProtoRef, indexProps) == null)
+                    return Logger.WarnReturn(false, $"UnlockAvatarEmote(): Failed to assign emote power {emoteProtoRef.GetNameFormatted()} to avatar [{avatar}]");
+            }
+
+            return true;
+        }
+
         public AvatarUnlockType GetAvatarUnlockType(PrototypeId avatarRef)
         {
             var avatarProto = GameDatabase.GetPrototype<AvatarPrototype>(avatarRef);
@@ -2059,7 +2346,7 @@ namespace MHServerEmu.Games.Entities
 
         public void OnFullscreenMovieStarted(PrototypeId movieRef)
         {
-            Logger.Trace($"OnFullscreenMovieStarted {GameDatabase.GetFormattedPrototypeName(movieRef)} for {_playerName}");
+            //Logger.Trace($"OnFullscreenMovieStarted {GameDatabase.GetFormattedPrototypeName(movieRef)} for {_playerName}");
             var movieProto = GameDatabase.GetPrototype<FullscreenMoviePrototype>(movieRef);
             if (movieProto == null) return;
             if (movieProto.MovieType == MovieType.Cinematic)
@@ -2073,7 +2360,7 @@ namespace MHServerEmu.Games.Entities
         {
             if (syncRequestId != 0 && syncRequestId < FullscreenMovieSyncRequestId) return;
 
-            Logger.Trace($"OnFullscreenMovieFinished {GameDatabase.GetFormattedPrototypeName(movieRef)} Canceled = {userCancelled} by {_playerName}");
+            //Logger.Trace($"OnFullscreenMovieFinished {GameDatabase.GetFormattedPrototypeName(movieRef)} Canceled = {userCancelled} by {_playerName}");
 
             var movieProto = GameDatabase.GetPrototype<FullscreenMoviePrototype>(movieRef);
             if (movieProto == null) return;
@@ -2687,13 +2974,17 @@ namespace MHServerEmu.Games.Entities
             SendMessage(message);
         }
 
-        public void SendOpenUIPanel(AssetId panelNameId)
+        public bool SendOpenUIPanel(AssetId panelNameId)
         {
-            if (panelNameId == AssetId.Invalid) return;
+            if (panelNameId == AssetId.Invalid) return Logger.WarnReturn(false, "SendOpenUIPanel(): panelNameId == AssetId.Invalid");
+
             string panelName = GameDatabase.GetAssetName(panelNameId);
-            if (panelName == "Unknown") return;
-            var message = NetMessageOpenUIPanel.CreateBuilder().SetPanelName(panelName).Build();
+            if (panelName == "Unknown") return Logger.WarnReturn(false, "SendOpenUIPanel(): panelName == Unknown");
+
+            NetMessageOpenUIPanel message = NetMessageOpenUIPanel.CreateBuilder().SetPanelName(panelName).Build();
             SendMessage(message);
+
+            return true;
         }
 
         public void SendWaypointNotification(PrototypeId waypointRef, bool show = true)

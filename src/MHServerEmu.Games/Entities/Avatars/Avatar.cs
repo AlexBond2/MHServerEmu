@@ -52,6 +52,7 @@ namespace MHServerEmu.Games.Entities.Avatars
         private readonly EventPointer<TransformModeChangeEvent> _transformModeChangeEvent = new();
         private readonly EventPointer<TransformModeExitPowerEvent> _transformModeExitPowerEvent = new();
         private readonly EventPointer<UnassignMappedPowersForRespecEvent> _unassignMappedPowersForRespec = new();
+        private readonly EventPointer<RegionTeleportEvent> _regionTeleportEvent = new();
 
         private readonly EventPointer<EnableEnduranceRegenEvent>[] _enableEnduranceRegenEvents = new EventPointer<EnableEnduranceRegenEvent>[(int)ManaType.NumTypes];
         private readonly EventPointer<UpdateEnduranceEvent>[] _updateEnduranceEvents = new EventPointer<UpdateEnduranceEvent>[(int)ManaType.NumTypes];
@@ -554,6 +555,30 @@ namespace MHServerEmu.Games.Entities.Avatars
                 .Build();
 
             Game.NetworkManager.SendMessageToInterested(message, this, AOINetworkPolicyValues.AOIChannelProximity | AOINetworkPolicyValues.AOIChannelOwner);
+        }
+
+        #endregion
+
+        #region Teleports
+
+        public void ScheduleRegionTeleport(PrototypeId targetProtoRef, TimeSpan delay)
+        {
+            if (_regionTeleportEvent.IsValid)
+                Game.GameEventScheduler.CancelEvent(_regionTeleportEvent);
+
+            if (IsDead)
+                Resurrect();
+
+            ScheduleEntityEvent(_regionTeleportEvent, delay, targetProtoRef);
+        }
+
+        private bool DoRegionTeleport(PrototypeId targetProtoRef)
+        {
+            Player player = GetOwnerOfType<Player>();
+            if (player == null) return Logger.WarnReturn(false, "DoRegionTeleport(): player == null");
+
+            Transition.TeleportToTarget(player, targetProtoRef);
+            return true;
         }
 
         #endregion
@@ -4025,6 +4050,90 @@ namespace MHServerEmu.Games.Entities.Avatars
             return InventoryResult.UnknownFailure;
         }
 
+        /// <summary>
+        /// Validates item movement when equipping items to an avatar.
+        /// </summary>
+        /// <remarks>
+        /// In practice this validates only artifacts equipment.
+        /// </remarks>
+        public static InventoryResult ValidateEquipmentChange(Game game, Item itemToBeMoved, InventoryLocation fromInvLoc, InventoryLocation toInvLoc, out Item resultItem)
+        {
+            resultItem = null;
+
+            if (itemToBeMoved.InventoryLocation.Equals(fromInvLoc) == false)
+                return Logger.WarnReturn(InventoryResult.Invalid, "ValidateEquipmentChange(): itemToBeMoved.InventoryLocation.Equals(fromInvLoc) == false");
+            
+            // Validate only items that are being moved to avatar inventories (i.e. being equipped)
+            Avatar containerAvatar = game.EntityManager.GetEntity<Avatar>(toInvLoc.ContainerId);
+            if (containerAvatar == null)
+                return InventoryResult.Success;
+
+            // Validate only artifacts (TODO: make sure this is the case in other versions of the game)
+            if (toInvLoc.IsArtifactInventory == false || fromInvLoc.IsArtifactInventory)
+                return InventoryResult.Success;
+
+            List<Inventory> otherArtifactInvs = ListPool<Inventory>.Instance.Get();
+
+            switch (toInvLoc.InventoryConvenienceLabel)
+            {
+                case InventoryConvenienceLabel.AvatarArtifact1:
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact2));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact3));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact4));
+                    break;
+
+                case InventoryConvenienceLabel.AvatarArtifact2:
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact1));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact3));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact4));
+                    break;
+
+                case InventoryConvenienceLabel.AvatarArtifact3:
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact1));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact2));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact4));
+                    break;
+
+                case InventoryConvenienceLabel.AvatarArtifact4:
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact1));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact2));
+                    otherArtifactInvs.Add(containerAvatar.GetInventory(InventoryConvenienceLabel.AvatarArtifact3));
+                    break;
+            }
+
+            try
+            {
+                if (otherArtifactInvs[0] == null || otherArtifactInvs[1] == null || otherArtifactInvs[2] == null)
+                    return Logger.WarnReturn(InventoryResult.Invalid, "ValidateEquipmentChange(): otherArtifactInvs[0] == null || otherArtifactInvs[1] == null || otherArtifactInvs[2] == null");
+
+                EntityManager entityManager = game.EntityManager;
+                for (int i = 0; i < otherArtifactInvs.Count; i++)
+                {
+                    if (otherArtifactInvs[i].Count == 0)
+                        continue;
+
+                    ulong otherArtifactId = otherArtifactInvs[i].GetEntityInSlot(0);
+                    Item otherArtifact = entityManager.GetEntity<Item>(otherArtifactId);
+                    if (otherArtifact == null) return Logger.WarnReturn(InventoryResult.Invalid, "ValidateEquipmentChange(): otherArtifact == null");
+
+                    if (itemToBeMoved.PrototypeDataRef == otherArtifact.PrototypeDataRef)
+                        return InventoryResult.InvalidTwoOfSameArtifact;
+
+                    if (itemToBeMoved.CanBeEquippedWithItem(otherArtifact) == false)
+                    {
+                        resultItem = otherArtifact;
+                        return InventoryResult.InvalidRestrictedByOtherItem;
+                    }
+                }
+
+                return InventoryResult.Success;
+            }
+            finally
+            {
+                ListPool<Inventory>.Instance.Return(otherArtifactInvs);
+            }
+        }
+
         public override void OnOtherEntityAddedToMyInventory(Entity entity, InventoryLocation invLoc, bool unpackedArchivedEntity)
         {
             base.OnOtherEntityAddedToMyInventory(entity, invLoc, unpackedArchivedEntity);
@@ -6243,6 +6352,11 @@ namespace MHServerEmu.Games.Entities.Avatars
         private class UnassignMappedPowersForRespecEvent : CallMethodEvent<Entity>
         {
             protected override CallbackDelegate GetCallback() => (t) => ((Avatar)t).UnassignMappedPowersForRespec();
+        }
+
+        private class RegionTeleportEvent : CallMethodEventParam1<Entity, PrototypeId>
+        {
+            protected override CallbackDelegate GetCallback() => (t, p1) => ((Avatar)t).DoRegionTeleport(p1);
         }
 
         #endregion

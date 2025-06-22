@@ -181,8 +181,6 @@ namespace MHServerEmu.Games.Entities
 
                     TransitionDestination destination = _destinationList[0];
 
-                    Logger.Trace($"Transition Destination Entity: {destination.EntityRef.GetName()}");
-
                     PrototypeId targetRegionProtoRef = destination.RegionRef;
 
                     // Check if our target is outside of the current region and we need to do a remote teleport
@@ -239,9 +237,25 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
+        public static bool TeleportToTarget(Player player, PrototypeId targetProtoRef)
+        {
+            var targetProto = targetProtoRef.As<RegionConnectionTargetPrototype>();
+            if (targetProto == null) return Logger.WarnReturn(false, "TeleportToTarget(): targetProto == null");
+
+            Region region = player.GetRegion();
+            if (region == null) return Logger.WarnReturn(false, "TeleportToTarget(): region == null");
+
+            RegionPrototype targetRegionProto = targetRegionProto = targetProto.Region.As<RegionPrototype>();
+            if (targetRegionProto == null) return Logger.WarnReturn(false, "TeleportToTarget(): targetRegionProto == null");
+
+            if (RegionPrototype.Equivalent(targetRegionProto, region.Prototype))
+                return TeleportToLocalTarget(player, targetProtoRef);
+            else
+                return TeleportToRemoteTarget(player, targetProtoRef);
+        }
+
         public static bool TeleportToRemoteTarget(Player player, PrototypeId targetProtoRef)
         {
-            Logger.Trace($"TeleportToRemoteTarget(): targetProtoRef={targetProtoRef.GetNameFormatted()}");
             player.PlayerConnection.MoveToTarget(targetProtoRef);
             return true;
         }
@@ -297,7 +311,6 @@ namespace MHServerEmu.Games.Entities
         public static bool TeleportToLastTown(Player player)
         {
             // TODO: Teleport to the last saved hub
-            Logger.Trace($"TeleportToLastTown(): Destination LastTown");
             player.PlayerConnection.MoveToTarget(GameDatabase.GlobalsPrototype.DefaultStartTargetFallbackRegion);
             return true;
         }
