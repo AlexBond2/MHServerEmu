@@ -28,16 +28,11 @@ namespace MHServerEmu.Frontend
         private MuxChannel _muxChannel1;
         private MuxChannel _muxChannel2;
 
-        private ulong _gameId;
-
         public IFrontendSession Session { get; private set; } = null;
-        public DBAccount Account { get => Session?.Account; }
-
-        // Access game id atomically using Interlocked because this is used by multiple threads to determine whether the client is in a game.
-        public ulong GameId { get => Interlocked.Read(ref _gameId); set => Interlocked.Exchange(ref _gameId, value); }
+        public DBAccount Account { get => (DBAccount)Session?.Account; }
 
         public bool IsConnected { get => Connection.Connected; }
-        public bool IsInGame { get => GameId != 0; }
+        public ulong DbId { get => Session != null ? (ulong)Account.Id : 0; }
 
         /// <summary>
         /// Constructs a new <see cref="FrontendClient"/> instance for the provided <see cref="TcpClientConnection"/>.
@@ -65,11 +60,32 @@ namespace MHServerEmu.Frontend
             Connection.Disconnect();
         }
 
+        public void SuspendReceiveTimeout()
+        {
+            Connection.IsReceiveTimeoutSuspended = true;
+        }
+
+        public bool AssignSession(IFrontendSession session)
+        {
+            if (Session != null)
+                return Logger.WarnReturn(false, $"AssignSession(): Failed to assign {session} to a client: already assigned {Session}");
+
+            Session = session;
+
+            _muxChannel1.FinishAuth();
+            _muxChannel2.FinishAuth();
+
+            return true;
+        }
+
         public bool HandleIncomingMessageBuffer(ushort muxId, in MessageBuffer messageBuffer)
         {
             // Skip messages from clients that have already disconnected
             if (Connection.Connected == false)
+            {
+                messageBuffer.Destroy();
                 return Logger.WarnReturn(false, $"HandleIncomingMessageBuffer(): Client [{this}] has already disconnected");
+            }
 
             bool success;
 
@@ -132,22 +148,6 @@ namespace MHServerEmu.Frontend
             _muxReader.HandleIncomingData(buffer, length);
         }
 
-        /// <summary>
-        /// Assigns an <see cref="IFrontendSession"/> to this <see cref="FrontendClient"/>.
-        /// </summary>
-        public bool AssignSession(IFrontendSession session)
-        {
-            if (Session != null)
-                return Logger.WarnReturn(false, $"AssignSession(): Failed to assign {session} to a client: already assigned {Session}");
-
-            Session = session;
-
-            _muxChannel1.FinishAuth();
-            _muxChannel2.FinishAuth();
-
-            return true;
-        }
-
         public void OnDisconnected()
         {
             _muxChannel1.Disconnect();
@@ -176,7 +176,7 @@ namespace MHServerEmu.Frontend
             private readonly ushort _muxId;
 
             private MuxChannelState _state;
-            private ServerType _service;
+            private GameServiceType _service;
 
             public MuxChannel(FrontendClient client, ushort muxId)
             {
@@ -184,7 +184,7 @@ namespace MHServerEmu.Frontend
                 _muxId = muxId;
 
                 _state = MuxChannelState.Auth;
-                _service = ServerType.FrontendServer;
+                _service = GameServiceType.Frontend;
             }
 
             public override string ToString()
@@ -206,7 +206,7 @@ namespace MHServerEmu.Frontend
                 // Notify the service we are connected to that this channel has been disconnected
                 if (_state == MuxChannelState.Connected)
                 {
-                    GameServiceProtocol.RemoveClient removeClient = new(_client);
+                    ServiceMessage.RemoveClient removeClient = new(_client);
                     ServerManager.Instance.SendMessageToService(_service, removeClient);
                 }
 
@@ -243,8 +243,8 @@ namespace MHServerEmu.Frontend
 
                 // Routing this message should authenticate the client if the credentials are successfully verified
                 MailboxMessage mailboxMessage = new(messageBuffer.MessageId, clientCredentials);
-                GameServiceProtocol.RouteMessage routeMessage = new(_client, typeof(FrontendProtocolMessage), mailboxMessage);
-                ServerManager.Instance.SendMessageToService(ServerType.PlayerManager, routeMessage);
+                ServiceMessage.RouteMessage routeMessage = new(_client, typeof(FrontendProtocolMessage), mailboxMessage);
+                ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, routeMessage);
 
                 return true;
             }
@@ -264,14 +264,14 @@ namespace MHServerEmu.Frontend
                         if (_muxId != 1)
                             goto default;
 
-                        _service = ServerType.PlayerManager;
+                        _service = GameServiceType.PlayerManager;
                         break;
 
                     case PubSubServerTypes.GROUPING_MANAGER_FRONTEND:
                         if (_muxId != 2)
                             goto default;
 
-                        _service = ServerType.GroupingManager;
+                        _service = GameServiceType.GroupingManager;
                         break;
 
                     default:
@@ -283,7 +283,7 @@ namespace MHServerEmu.Frontend
                 // Previously we had issues when the client received loading messages before it had the chance to connect
                 // to the grouping manager, resulting in having no access to chat. In theory it shouldn't happen anymore,
                 // but if it does, this code needs to change.
-                GameServiceProtocol.AddClient addClient = new(_client);
+                ServiceMessage.AddClient addClient = new(_client);
                 ServerManager.Instance.SendMessageToService(_service, addClient);
 
                 return true;
@@ -291,7 +291,7 @@ namespace MHServerEmu.Frontend
 
             private readonly bool RouteMessageBuffer(in MessageBuffer messageBuffer)
             {
-                GameServiceProtocol.RouteMessageBuffer routeMessageBuffer = new(_client, messageBuffer);
+                ServiceMessage.RouteMessageBuffer routeMessageBuffer = new(_client, messageBuffer);
                 ServerManager.Instance.SendMessageToService(_service, routeMessageBuffer);
                 return true;
             }

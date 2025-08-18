@@ -128,33 +128,6 @@ namespace MHServerEmu.Games.Network
 
         #endregion
 
-        #region Pending Processing
-
-        /// <summary>
-        /// Loads pending players.
-        /// </summary>
-        public void ProcessPendingPlayerConnections()
-        {
-            while (_pendingPlayerConnectionQueue.Count > 0)
-            {
-                PlayerConnection playerConnection = _pendingPlayerConnectionQueue.Dequeue();
-                playerConnection.EnterGame();
-            }
-        }
-
-        /// <summary>
-        /// Requests a player to be loaded.
-        /// </summary>
-        public void SetPlayerConnectionPending(PlayerConnection playerConnection)
-        {
-            // NOTE: We flush messages when we set the connection as pending so that
-            // we can deliver the loading screen message to the client ASAP.
-            playerConnection.FlushMessages();
-            _pendingPlayerConnectionQueue.Enqueue(playerConnection);
-        }
-
-        #endregion
-
         #region Message Sending
 
         /// <summary>
@@ -216,9 +189,16 @@ namespace MHServerEmu.Games.Network
 
         protected override bool AcceptAndRegisterNewClient(IFrontendClient frontendClient)
         {
-            // Make sure this client is still connected (it may not be if we are lagging hard)
+            // Make sure this client is still connected (it may not be, e.g. if we are lagging hard)
             if (frontendClient.IsConnected == false)
-                return Logger.WarnReturn(false, $"AcceptAndRegisterNewClient(): Client [{frontendClient}] is no longer connected");
+            {
+                Logger.Warn($"AcceptAndRegisterNewClient(): Client [{frontendClient}] is no longer connected");
+
+                // Self-initiate a removal request
+                _game.GameManager.RemoveClientFromGame(frontendClient, _game.Id, true);
+                _game.GameManager.OnClientRemoved(_game, frontendClient);
+                return false;
+            }
 
             // Construct a new PlayerConnection bound to this IFrontendClient
             PlayerConnection playerConnection = new(_game, frontendClient);
@@ -238,9 +218,6 @@ namespace MHServerEmu.Games.Network
             if (RegisterNetClient(playerConnection) == false)
                 Logger.Error($"AcceptAndRegisterNewClient(): Failed to add client [{frontendClient}]");
 
-            // TODO: Replace this with a message to PlayerManager
-            frontendClient.GameId = _game.Id;
-
             // Send time sync straight away for the client to be able to initialize its EventScheduler (needed for loading screens).
             // This will also make the client start sending pings, so it needs to be done after we assign game id.
             SendMessageImmediate(playerConnection, NetMessageInitialTimeSync.CreateBuilder()
@@ -248,14 +225,15 @@ namespace MHServerEmu.Games.Network
                 .SetDateTimeServerSent(Clock.UnixTime.Ticks / 10)
                 .Build());
 
-            // Initializing a player connection sends the achievement database dump and a region availability query
+            // Initializing a player connection loads player data and sends the achievement database if needed
             if (playerConnection.Initialize() == false)
             {
                 playerConnection.Disconnect();
                 return false;
             }
 
-            // This connection will be set as pending when we receive region availability query response
+            // Notify the player manager. The player will be put into a region when we receive transfer params.
+            _game.GameManager.OnClientAdded(_game, frontendClient);
 
             Logger.Info($"Accepted and registered client [{frontendClient}] to game [{_game}]");
             return true;

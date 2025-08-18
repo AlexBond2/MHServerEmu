@@ -2,9 +2,10 @@
 using Gazillion;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
+using MHServerEmu.Core.Network;
 using MHServerEmu.Core.System;
+using MHServerEmu.Core.System.Time;
 using MHServerEmu.DatabaseAccess.Models;
-using MHServerEmu.Frontend;
 using MHServerEmu.Games;
 
 namespace MHServerEmu.PlayerManagement
@@ -15,15 +16,19 @@ namespace MHServerEmu.PlayerManagement
     public class SessionManager
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
+        private static readonly TimeSpan PendingSessionLifespan = TimeSpan.FromSeconds(60);
 
         private readonly PlayerManagerService _playerManager;
 
         private readonly IdGenerator _idGenerator = new(IdType.Session, 0);
 
-        // TODO: Periodically purge pending sessions
         private readonly Dictionary<ulong, ClientSession> _pendingSessionDict = new();
         private readonly Dictionary<ulong, ClientSession> _activeSessionDict = new();
-        private readonly Dictionary<ulong, FrontendClient> _clientDict = new();
+
+        // This client dictionary prevents sessions from being used by multiple clients
+        private readonly Dictionary<ulong, IFrontendClient> _clientDict = new();
+
+        private CooldownTimer _updateTimer = new(TimeSpan.FromMilliseconds(1000));
 
         public int PendingSessionCount { get => _pendingSessionDict.Count; }
         public int ActiveSessionCount { get => _activeSessionDict.Count; }
@@ -34,6 +39,14 @@ namespace MHServerEmu.PlayerManagement
         public SessionManager(PlayerManagerService playerManager)
         {
             _playerManager = playerManager;
+        }
+
+        public void Update()
+        {
+            if (_updateTimer.Check() == false)
+                return;
+
+            PurgeExpiredSessions();
         }
 
         /// <summary>
@@ -63,7 +76,6 @@ namespace MHServerEmu.PlayerManagement
             // Verify credentials
             AuthStatusCode statusCode = AccountManager.TryGetAccountByLoginDataPB(loginDataPB, out DBAccount account);
 
-            // Early exit if there is an issue with the account
             if (statusCode != AuthStatusCode.Success)
                 return statusCode;
 
@@ -91,10 +103,10 @@ namespace MHServerEmu.PlayerManagement
 
         /// <summary>
         /// Verifies the provided <see cref="ClientCredentials"/> and assigns the appropriate <see cref="ClientSession"/>
-        /// to the specified <see cref="FrontendClient"/> if they are valid. Returns <see langword="true"/> if the credentials
+        /// to the specified <see cref="IFrontendClient"/> if they are valid. Returns <see langword="true"/> if the credentials
         /// are valid.
         /// </summary>
-        public bool VerifyClientCredentials(FrontendClient client, ClientCredentials credentials)
+        public bool VerifyClientCredentials(IFrontendClient client, ClientCredentials credentials)
         {
             // Check if a pending session for these credentials exists
             ClientSession session;
@@ -165,9 +177,29 @@ namespace MHServerEmu.PlayerManagement
         /// <summary>
         /// Retrieves the <see cref="FrontendClient"/> for the specified session id. Returns <see langword="true"/> if successful.
         /// </summary>
-        public bool TryGetClient(ulong sessionId, out FrontendClient client)
+        public bool TryGetClient(ulong sessionId, out IFrontendClient client)
         {
             return _clientDict.TryGetValue(sessionId, out client);
+        }
+
+        private void PurgeExpiredSessions()
+        {
+            lock (_pendingSessionDict)
+            {
+                if (_pendingSessionDict.Count == 0)
+                    return;
+
+                foreach (var kvp in _pendingSessionDict)
+                {
+                    ClientSession session = kvp.Value;
+
+                    if (session.Length <= PendingSessionLifespan)
+                        continue;
+
+                    Logger.Warn($"Pending session expired: sessionId=0x{session.Id:X}, account=[{session.Account}]");
+                    _pendingSessionDict.Remove(kvp.Key);
+                }
+            }
         }
     }
 }

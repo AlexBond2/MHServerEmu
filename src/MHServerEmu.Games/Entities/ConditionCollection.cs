@@ -720,6 +720,11 @@ namespace MHServerEmu.Games.Entities
             RemoveConditionsFiltered(ConditionFilter.IsConditionCancelOnPowerUsePostFunc, powerProto);
         }
 
+        public void RemoveCancelOnIntraRegionTeleportConditions()
+        {
+            RemoveConditionsFiltered(ConditionFilter.IsConditionCancelOnIntraRegionTeleportFunc);
+        }
+
         public void RemoveCancelOnProcTriggerConditions(ProcTriggerType triggerType)
         {
             if (_cancelOnProcTriggerCache.TryGetValue(triggerType, out HashSet<ulong> conditionIds) == false)
@@ -887,7 +892,7 @@ namespace MHServerEmu.Games.Entities
 
         public static Condition AllocateCondition()
         {
-            return ConditionPool.Instance.Get();
+            return Game.Current.ConditionPool.Get();
         }
 
         public static bool DeleteCondition(Condition condition)
@@ -897,7 +902,7 @@ namespace MHServerEmu.Games.Entities
 
             condition.Properties.Unbind();
 
-            ConditionPool.Instance.Return(condition);
+            Game.Current.ConditionPool.Return(condition);
 
             return true;
         }

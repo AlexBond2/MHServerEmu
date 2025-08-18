@@ -217,13 +217,11 @@ namespace MHServerEmu.Core.Network.Tcp
                 try
                 {
                     // Wait for a connection
-                    Logger.Trace("Listening for connections...");
                     Socket socket = await _listener.AcceptAsync().WaitAsync(_cts.Token);
                     socket.SendTimeout = _sendTimeoutMS;
                     socket.SendBufferSize = SendBufferSize;
 
                     // Establish a new client connection
-                    Logger.Trace("Accepting connection...");
                     TcpClientConnection connection = new(this, socket);
 
                     lock (_connectionDict)
@@ -268,7 +266,7 @@ namespace MHServerEmu.Core.Network.Tcp
                     if (_cts.Token.IsCancellationRequested)
                         return;
 
-                    if (receiveTask.IsCompleted == false)
+                    if (connection.IsReceiveTimeoutSuspended == false && receiveTask.IsCompleted == false)
                         throw new TimeoutException();
 
                     int bytesReceived = await receiveTask;
@@ -278,6 +276,8 @@ namespace MHServerEmu.Core.Network.Tcp
                         DisconnectClientInternal(connection);
                         return;
                     }
+
+                    connection.IsReceiveTimeoutSuspended = false;
 
                     // Do the OnDataReceived() callback to parse received data from the connection's buffer.
                     OnDataReceived(connection, connection.ReceiveBuffer, bytesReceived);

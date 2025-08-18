@@ -137,7 +137,11 @@ namespace MHServerEmu.Games.GameData.PatchManager
             if (entry.СlearPath != currentPath) return false;
 
             var fieldInfo = prototype.GetType().GetProperty(entry.FieldName);
-            if (fieldInfo == null) return false;
+            if (fieldInfo == null)
+            {
+                Logger.Warn($"CheckAndUpdate: {entry.FieldName} not found for {entry.Prototype}");
+                return false;
+            }
 
             UpdateValue(prototype, fieldInfo, entry);
             Logger.Trace($"Patch Prototype: {entry.Prototype} {entry.Path} = {entry.Value.GetValue()}");
@@ -162,9 +166,12 @@ namespace MHServerEmu.Games.GameData.PatchManager
             try
             {
                 Type fieldType = fieldInfo.PropertyType;
-                if (entry.InsertValue)
+                if (entry.ArrayValue)
                 {
-                    InsertValue(prototype, fieldInfo, entry.Value);
+                    if (entry.ArrayIndex != -1)
+                        SetIndexValue(prototype, fieldInfo, entry.ArrayIndex, entry.Value);
+                    else
+                        InsertValue(prototype, fieldInfo, entry.Value);
                 }
                 else
                 {
@@ -177,6 +184,28 @@ namespace MHServerEmu.Games.GameData.PatchManager
             {
                 Logger.WarnException(ex, $"Failed UpdateValue: [{entry.Prototype}] [{entry.Path}] {ex.Message}");
             }
+        }
+
+        private static void SetIndexValue(Prototype prototype, PropertyInfo fieldInfo, int index, ValueBase value)
+        {
+            Type fieldType = fieldInfo.PropertyType;
+            if (fieldType.IsArray == false)
+                throw new InvalidOperationException($"Field {fieldInfo.Name} is not array.");
+
+            Array array = (Array)fieldInfo.GetValue(prototype);
+            if (array == null || index < 0 || index >= array.Length)
+                throw new IndexOutOfRangeException($"Invalid index {index} for array {fieldInfo.Name}.");
+
+            object valueEntry = value.GetValue();
+
+            var entryType = valueEntry.GetType();
+            Type elementType = fieldType.GetElementType();
+
+            if (elementType == null || IsTypeCompatible(elementType, entryType, value.ValueType) == false)
+                throw new InvalidOperationException($"Type {value.ValueType} is not assignable to {elementType?.Name}.");
+
+            object converted = ConvertValue(valueEntry, elementType);
+            array.SetValue(converted, index);
         }
 
         private static void InsertValue(Prototype prototype, PropertyInfo fieldInfo, ValueBase value)
@@ -258,14 +287,16 @@ namespace MHServerEmu.Games.GameData.PatchManager
         public void SetPath(Prototype parent, Prototype child, string fieldName)
         {
             string parentPath = _pathDict.TryGetValue(parent, out var path) ? path : string.Empty;
-            if (parent.DataRef != PrototypeId.Invalid) parentPath = string.Empty;
+            if (parent.DataRef != PrototypeId.Invalid && _patchDict.ContainsKey(parent.DataRef)) 
+                parentPath = string.Empty;
             _pathDict[child] = $"{parentPath}.{fieldName}";
         }
 
         public void SetPathIndex(Prototype parent, Prototype child, string fieldName, int index)
         {
             string parentPath = _pathDict.TryGetValue(parent, out var path) ? path : string.Empty;
-            if (parent.DataRef != PrototypeId.Invalid) parentPath = string.Empty;
+            if (parent.DataRef != PrototypeId.Invalid && _patchDict.ContainsKey(parent.DataRef)) 
+                parentPath = string.Empty;
             _pathDict[child] = $"{parentPath}.{fieldName}[{index}]";
         }
     }

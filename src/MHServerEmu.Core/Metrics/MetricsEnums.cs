@@ -3,24 +3,16 @@
     public enum MetricsReportFormat
     {
         PlainText,
-        Json
+        Json,
+        Html,
     }
 
     public enum GamePerformanceMetricEnum
     {
         Invalid = -1,
+        UpdateTime,
         FrameTime,
-        FrameProcessServiceMessagesTime,
-        FrameTriggerEventsTime,
-        FrameLocomoteEntitiesTime,
-        FramePhysicsResolveEntitiesTime,
-        FrameProcessDeferredListsTime,
-        FrameSendAllPendingMessagesTime,
-        CatchUpFrames,
-        TimeSkip,
         ScheduledEventsPerUpdate,
-        EventSchedulerFramesPerUpdate,
-        RemainingScheduledEvents,
         EntityCount,
         PlayerCount,
         NumGameMetrics

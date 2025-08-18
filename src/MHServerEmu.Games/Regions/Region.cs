@@ -6,6 +6,7 @@ using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Memory;
+using MHServerEmu.Core.Network;
 using MHServerEmu.Core.Serialization;
 using MHServerEmu.Core.System.Time;
 using MHServerEmu.Core.VectorMath;
@@ -93,6 +94,7 @@ namespace MHServerEmu.Games.Regions
         public bool IsPublic { get => Prototype != null && Prototype.IsPublic; }
         public bool IsPrivate { get => Prototype != null && Prototype.IsPrivate; }
         public RegionBehavior Behavior { get => Prototype != null ? Prototype.Behavior : RegionBehavior.Invalid; }
+        public bool CanBeLastTown { get => Behavior == RegionBehavior.Town || PrototypeDataRef == GameDatabase.GlobalsPrototype.PrestigeRegionProtoRef; }
 
         public Aabb Aabb { get; private set; }
         public Aabb2 Aabb2 { get => new(Aabb); }
@@ -450,8 +452,14 @@ namespace MHServerEmu.Games.Regions
             else _statusFlag ^= status;
         }
 
-        public void Shutdown()
+        public void Shutdown(bool logLifetime)
         {
+            if (logLifetime)
+            {
+                TimeSpan lifetime = Clock.UnixTime - CreatedTime;
+                Logger.Info($"Shutdown(): Region = {this}, Lifetime = {(int)lifetime.TotalMinutes} min {lifetime:ss} sec");
+            }
+
             SetStatus(RegionStatus.Shutdown, true);
 
             /* int tries = 100;
@@ -496,12 +504,6 @@ namespace MHServerEmu.Games.Regions
                 MetaGames.Remove(metaGameId);
             }
 
-            if (Settings.PortalId != 0) // Destroy Portal with region
-            {
-                var portal = entityManager.GetEntity<Entity>(Settings.PortalId);
-                portal?.Destroy();
-            }
-
             while (Areas.Count > 0)
             {
                 var areaId = Areas.First().Key;
@@ -526,7 +528,9 @@ namespace MHServerEmu.Games.Regions
             if (ShutdownRequested)
                 return;
 
-            Game.RegionManager.RequestRegionShutdown(Id);
+            ServiceMessage.RequestRegionShutdown message = new(Id);
+            ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, message);
+
             ShutdownRequested = true;
             Logger.Trace($"Shutdown requested for region [{this}]");
         }
@@ -1033,7 +1037,7 @@ namespace MHServerEmu.Games.Regions
             // FIXME: Figure out why we fail to find the target in Upper East Side as well.
             if (found == false)
             {
-                Logger.Warn($"FindTargetLocation(): Target {entityProtoRef.GetName()} not found in the cell {cellProtoRef.GetName()}, falling back to searching all cells");
+                //Logger.Warn($"FindTargetLocation(): Target {entityProtoRef.GetName()} not found in the cell {cellProtoRef.GetName()}, falling back to searching all cells");
 
                 foreach (Cell cell in Cells)
                 {
@@ -1043,6 +1047,26 @@ namespace MHServerEmu.Games.Regions
             }
 
             return found;
+        }
+
+        public PrototypeId GetBodysliderPowerRef()
+        {
+            foreach (ulong metaGameId in MetaGames)
+            {
+                MetaGame metaGame = Game.EntityManager.GetEntity<MetaGame>(metaGameId);
+                if (metaGame == null)
+                    continue;
+
+                MetaGamePrototype metaGameProto = metaGame.MetaGamePrototype;
+                if (metaGameProto != null && metaGameProto.BodysliderOverride != PrototypeId.Invalid)
+                    return metaGameProto.BodysliderOverride;
+            }
+
+            GlobalsPrototype globalsProto = GameDatabase.GlobalsPrototype;
+            if (Behavior == RegionBehavior.Town)
+                return globalsProto.ReturnToFieldPower;
+            else
+                return globalsProto.ReturnToHubPower;
         }
 
         public static bool IsBoundsBlockedByEntity(Bounds bounds, WorldEntity entity, BlockingCheckFlags blockFlags)
@@ -1805,13 +1829,43 @@ namespace MHServerEmu.Games.Regions
 
         public void OnRecordPlayerDeath(Player player, Avatar avatar, WorldEntity killer)
         {
-            if (player == null) return;
+            if (player == null)
+                return;
 
-            /*  TODO PvP
-                PropertyEnum.PvPDeathsDuringMatch
-                PropertyEnum.PvPKillsDuringMatch
-                PropertyEnum.PvPKills
-            */
+            // NOTE: Recording it here instead of Avatar.OnKilled() will make these count when cheat death procs activate. Is this how it's supposed to work?
+            if (ShouldRecordPlayerDeath() && avatar != null)
+            {
+                if (avatar.IsInPvPMatch)
+                {
+                    if (killer != null)
+                    {
+                        Avatar killerAvatar = null;
+
+                        ulong xpTransferToId = killer.Properties[PropertyEnum.XPTransferToID];
+                        if (xpTransferToId != Entity.InvalidId)
+                            killerAvatar = Game.EntityManager.GetEntity<Avatar>(xpTransferToId);
+
+                        killerAvatar ??= killer.GetMostResponsiblePowerUser<Avatar>();
+
+                        if (killerAvatar != null)
+                        {
+                            killerAvatar.Properties.AdjustProperty(1, PropertyEnum.PvPKills);
+
+                            int killerMatchIndex = killerAvatar.Properties[PropertyEnum.PvPLastMatchIndex];
+                            killerAvatar.Properties.AdjustProperty(1, new(PropertyEnum.PvPKillsDuringMatch, (PropertyParam)killerMatchIndex));
+
+                            int victimMatchIndex = avatar.Properties[PropertyEnum.PvPLastMatchIndex];
+                            avatar.Properties.AdjustProperty(1, new(PropertyEnum.PvPDeathsDuringMatch, (PropertyParam)victimMatchIndex));
+                        }
+                    }
+
+                    avatar.Properties.AdjustProperty(1, PropertyEnum.PvPDeaths);
+                }
+                else
+                {
+                    avatar.Properties.AdjustProperty(1, PropertyEnum.NumberOfDeaths);
+                }
+            }
 
             if (Properties.HasProperty(PropertyEnum.EndlessLevel))
                 player.Properties.AdjustProperty(1, PropertyEnum.EndlessLevelDeathCount);
@@ -1819,6 +1873,24 @@ namespace MHServerEmu.Games.Regions
             _playerDeaths++;
 
             PlayerDeathRecordedEvent.Invoke(new(player));
+        }
+
+        public bool ShouldRecordPlayerDeath()
+        {
+            // Record deaths unless this a PvP region that has death recording explicitly disabled.
+            EntityManager entityManager = Game.EntityManager;
+
+            foreach (ulong metaGameId in MetaGames)
+            {
+                PvP pvp = entityManager.GetEntity<PvP>(metaGameId);
+                if (pvp == null)
+                    continue;
+
+                if (pvp.PvPPrototype?.RecordPlayerDeaths == false)
+                    return false;
+            }
+
+            return true;
         }
 
         public PrototypeId GetStartTarget(Player player)
@@ -1860,7 +1932,7 @@ namespace MHServerEmu.Games.Regions
         public bool InOwnerParty(Player player)
         {
             ulong playerGuid = player.DatabaseUniqueId;
-            if (Settings.PlayerGuidParty == playerGuid) return true;
+            if (Settings.OwnerPlayerDbId == playerGuid) return true;    // FIXME: This doesn't look right
 
             // TODO check owner is in party
 

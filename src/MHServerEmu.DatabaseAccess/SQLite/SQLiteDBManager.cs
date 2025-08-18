@@ -13,7 +13,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
     /// </summary>
     public class SQLiteDBManager : IDBManager
     {
-        private const int CurrentSchemaVersion = 3;         // Increment this when making changes to the database schema
+        private const int CurrentSchemaVersion = 4;         // Increment this when making changes to the database schema
         private const int NumTestAccounts = 5;              // Number of test accounts to create for new database files
         private const int NumPlayerDataWriteAttempts = 3;   // Number of write attempts to do when saving player data
 
@@ -25,8 +25,8 @@ namespace MHServerEmu.DatabaseAccess.SQLite
         private string _connectionString;
 
         private int _maxBackupNumber;
-        private TimeSpan _backupInterval;
-        private TimeSpan _lastBackupTime;
+        private CooldownTimer _backupTimer;
+        private volatile bool _backupInProgress;
 
         public static SQLiteDBManager Instance { get; } = new();
 
@@ -37,7 +37,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             var config = ConfigManager.Instance.GetConfig<SQLiteDBManagerConfig>();
 
             _dbFilePath = Path.Combine(FileHelper.DataDirectory, config.FileName);
-            _connectionString = $"Data Source={_dbFilePath}";
+            _connectionString = $"Data Source={_dbFilePath};Synchronous=NORMAL;";
 
             if (File.Exists(_dbFilePath) == false)
             {
@@ -53,8 +53,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             }
 
             _maxBackupNumber = config.MaxBackupNumber;
-            _backupInterval = TimeSpan.FromMinutes(config.BackupIntervalMinutes);
-            _lastBackupTime = Clock.GameTime;
+            _backupTimer = new(TimeSpan.FromMinutes(config.BackupIntervalMinutes));
             
             Logger.Info($"Using database file {FileHelper.GetRelativePath(_dbFilePath)}");
             return true;
@@ -149,11 +148,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             // Load fresh data
             using SQLiteConnection connection = GetConnection();
 
-            var @params = new { DbGuid = account.Id };
-
-            var players = connection.Query<DBPlayer>("SELECT * FROM Player WHERE DbGuid = @DbGuid", @params);
-            account.Player = players.FirstOrDefault();
-
+            account.Player = connection.QueryFirstOrDefault<DBPlayer>("SELECT * FROM Player WHERE DbGuid = @DbGuid", new { DbGuid = account.Id });
             if (account.Player == null)
             {
                 account.Player = new(account.Id);
@@ -161,19 +156,24 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             }
 
             // Load inventory entities
-            account.Avatars.AddRange(LoadEntitiesFromTable(connection, "Avatar", account.Id));
-            account.TeamUps.AddRange(LoadEntitiesFromTable(connection, "TeamUp", account.Id));
-            account.Items.AddRange(LoadEntitiesFromTable(connection, "Item", account.Id));
+            SQLiteEntityTable avatarTable = SQLiteEntityTable.GetTable(DBEntityCategory.Avatar);
+            SQLiteEntityTable teamUpTable = SQLiteEntityTable.GetTable(DBEntityCategory.TeamUp);
+            SQLiteEntityTable itemTable = SQLiteEntityTable.GetTable(DBEntityCategory.Item);
+            SQLiteEntityTable controlledEntityTable = SQLiteEntityTable.GetTable(DBEntityCategory.ControlledEntity);
+
+            avatarTable.LoadEntities(connection, account.Id, account.Avatars);
+            teamUpTable.LoadEntities(connection, account.Id, account.TeamUps);
+            itemTable.LoadEntities(connection, account.Id, account.Items);
 
             foreach (DBEntity avatar in account.Avatars)
             {
-                account.Items.AddRange(LoadEntitiesFromTable(connection, "Item", avatar.DbGuid));
-                account.ControlledEntities.AddRange(LoadEntitiesFromTable(connection, "ControlledEntity", avatar.DbGuid));
+                itemTable.LoadEntities(connection, avatar.DbGuid, account.Items);
+                controlledEntityTable.LoadEntities(connection, avatar.DbGuid, account.ControlledEntities);
             }
 
             foreach (DBEntity teamUp in account.TeamUps)
             {
-                account.Items.AddRange(LoadEntitiesFromTable(connection, "Item", teamUp.DbGuid));
+                itemTable.LoadEntities(connection, teamUp.DbGuid, account.Items);
             }
 
             return true;
@@ -184,7 +184,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
             for (int i = 0; i < NumPlayerDataWriteAttempts; i++)
             {
                 if (DoSavePlayerData(account))
-                    return Logger.InfoReturn(true, $"Successfully written player data for account [{account}]");
+                    return true;
 
                 // Maybe we should add a delay here
             }
@@ -313,8 +313,7 @@ namespace MHServerEmu.DatabaseAccess.SQLite
                     {
                         connection.Execute(@$"INSERT OR IGNORE INTO Player (DbGuid) VALUES (@DbGuid)", account.Player, transaction);
                         connection.Execute(@$"UPDATE Player SET ArchiveData=@ArchiveData, StartTarget=@StartTarget,
-                                            StartTargetRegionOverride=@StartTargetRegionOverride, AOIVolume=@AOIVolume,
-                                            GazillioniteBalance=@GazillioniteBalance WHERE DbGuid = @DbGuid",
+                                            AOIVolume=@AOIVolume, GazillioniteBalance=@GazillioniteBalance WHERE DbGuid = @DbGuid",
                                             account.Player, transaction);
                     }
                     else
@@ -323,26 +322,27 @@ namespace MHServerEmu.DatabaseAccess.SQLite
                     }
 
                     // Update inventory entities
-                    UpdateEntityTable(connection, transaction, "Avatar", account.Id, account.Avatars);
-                    UpdateEntityTable(connection, transaction, "TeamUp", account.Id, account.TeamUps);
-                    UpdateEntityTable(connection, transaction, "Item", account.Id, account.Items);
+                    SQLiteEntityTable avatarTable = SQLiteEntityTable.GetTable(DBEntityCategory.Avatar);
+                    SQLiteEntityTable teamUpTable = SQLiteEntityTable.GetTable(DBEntityCategory.TeamUp);
+                    SQLiteEntityTable itemTable = SQLiteEntityTable.GetTable(DBEntityCategory.Item);
+                    SQLiteEntityTable controlledEntityTable = SQLiteEntityTable.GetTable(DBEntityCategory.ControlledEntity);
+
+                    avatarTable.UpdateEntities(connection, transaction, account.Id, account.Avatars);
+                    teamUpTable.UpdateEntities(connection, transaction, account.Id, account.TeamUps);
+                    itemTable.UpdateEntities(connection, transaction, account.Id, account.Items);
 
                     foreach (DBEntity avatar in account.Avatars)
                     {
-                        UpdateEntityTable(connection, transaction, "Item", avatar.DbGuid, account.Items);
-                        UpdateEntityTable(connection, transaction, "ControlledEntity", avatar.DbGuid, account.ControlledEntities);
+                        itemTable.UpdateEntities(connection, transaction, avatar.DbGuid, account.Items);
+                        controlledEntityTable.UpdateEntities(connection, transaction, avatar.DbGuid, account.ControlledEntities);
                     }
 
                     foreach (DBEntity teamUp in account.TeamUps)
                     {
-                        UpdateEntityTable(connection, transaction, "Item", teamUp.DbGuid, account.Items);
+                        itemTable.UpdateEntities(connection, transaction, teamUp.DbGuid, account.Items);
                     }
 
                     transaction.Commit();
-
-                    TryCreateBackup();
-
-                    return true;
                 }
                 catch (Exception e)
                 {
@@ -350,24 +350,48 @@ namespace MHServerEmu.DatabaseAccess.SQLite
                     transaction.Rollback();
                     return false;
                 }
+
+                Logger.Info($"Successfully written player data for account [{account}]");
+
+                if (_backupInProgress == false && _backupTimer.Check())
+                {
+                    _backupInProgress = true;
+                    Task.Run(CreateBackup);
+                }
+
+                return true;
             }
         }
 
         /// <summary>
-        /// Creates a backup of the database file if enough time has passed since the last one.
+        /// Creates a backup of the database file using the SQLite backup API.
         /// </summary>
-        private void TryCreateBackup()
+        private void CreateBackup()
         {
-            // TODO: Use SQLite backup functionality for this
-            TimeSpan now = Clock.GameTime;
+            try
+            {
+                Logger.Info("Starting database backup...");
+                TimeSpan startTime = Clock.UnixTime;
 
-            if ((now - _lastBackupTime) < _backupInterval)
-                return;
+                if (FileHelper.PrepareFileBackup(_dbFilePath, _maxBackupNumber, out string backupFilePath) == false)
+                    return;
 
-            if (FileHelper.CreateFileBackup(_dbFilePath, _maxBackupNumber))
-                Logger.Info("Created database file backup");
+                using SQLiteConnection sourceConnection = GetConnection();
+                using SQLiteConnection backupConnection = new($"Data Source={backupFilePath}");
+                backupConnection.Open();
+                sourceConnection.BackupDatabase(backupConnection, "main", "main", -1, null, -1);
 
-            _lastBackupTime = now;
+                TimeSpan elapsed = Clock.UnixTime - startTime;
+                Logger.Info($"Created database backup in {elapsed.TotalMilliseconds} ms");
+            }
+            catch (Exception e)
+            {
+                Logger.Warn($"CreateBackup(): SQLite error creating database backup: {e.Message}");
+            }
+            finally
+            {
+                _backupInProgress = false;
+            }
         }
 
         /// <summary>
@@ -388,37 +412,6 @@ namespace MHServerEmu.DatabaseAccess.SQLite
         private static void SetSchemaVersion(SQLiteConnection connection, int version)
         {
             connection.Execute($"PRAGMA user_version = {version}");
-        }
-
-        /// <summary>
-        /// Loads <see cref="DBEntity"/> instances belonging to the specified container from the specified table.
-        /// </summary>
-        private static IEnumerable<DBEntity> LoadEntitiesFromTable(SQLiteConnection connection, string tableName, long containerDbGuid)
-        {
-            var @params = new { ContainerDbGuid = containerDbGuid };
-            return connection.Query<DBEntity>($"SELECT * FROM {tableName} WHERE ContainerDbGuid = @ContainerDbGuid", @params);
-        }
-
-        /// <summary>
-        /// Updates <see cref="DBEntity"/> instances belonging to the specified container in the specified table using the provided <see cref="DBEntityCollection"/>.
-        /// </summary>
-        private static void UpdateEntityTable(SQLiteConnection connection, SQLiteTransaction transaction, string tableName,
-            long containerDbGuid, DBEntityCollection dbEntityCollection)
-        {
-            var @params = new { ContainerDbGuid = containerDbGuid };
-
-            // Delete items that no longer belong to this account
-            var storedEntities = connection.Query<long>($"SELECT DbGuid FROM {tableName} WHERE ContainerDbGuid = @ContainerDbGuid", @params);
-            var entitiesToDelete = storedEntities.Except(dbEntityCollection.Guids);
-            connection.Execute($"DELETE FROM {tableName} WHERE DbGuid IN ({string.Join(',', entitiesToDelete)})");
-
-            // Insert and update
-            IReadOnlyList<DBEntity> entries = dbEntityCollection.GetEntriesForContainer(containerDbGuid);
-
-            connection.Execute(@$"INSERT OR IGNORE INTO {tableName} (DbGuid) VALUES (@DbGuid)", entries, transaction);
-            connection.Execute(@$"UPDATE {tableName} SET ContainerDbGuid=@ContainerDbGuid, InventoryProtoGuid=@InventoryProtoGuid,
-                                Slot=@Slot, EntityProtoGuid=@EntityProtoGuid, ArchiveData=@ArchiveData WHERE DbGuid=@DbGuid",
-                                entries, transaction);
         }
     }
 }

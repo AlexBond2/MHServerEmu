@@ -1,15 +1,10 @@
 ﻿using System.Diagnostics;
-using System.Globalization;
 using Gazillion;
-using Google.ProtocolBuffers;
 using MHServerEmu.Core.Config;
 using MHServerEmu.Core.Extensions;
-using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
-using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Metrics;
 using MHServerEmu.Core.Network;
-using MHServerEmu.Core.Network.Tcp;
 using MHServerEmu.Core.System.Random;
 using MHServerEmu.Core.System.Time;
 using MHServerEmu.Games.Common;
@@ -23,20 +18,30 @@ using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Loot;
 using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.Network;
+using MHServerEmu.Games.Network.InstanceManagement;
 using MHServerEmu.Games.Powers;
+using MHServerEmu.Games.Powers.Conditions;
 using MHServerEmu.Games.Regions;
 using MHServerEmu.Games.Social;
 using MHServerEmu.Games.UI;
 
 namespace MHServerEmu.Games
 {
+    public enum GameState
+    {
+        Created,
+        Running,
+        ShuttingDown,
+        Shutdown
+    }
+
     public enum GameShutdownReason
     {
-        ServerShuttingDown,
+        ShutdownRequested,
         GameInstanceCrash
     }
 
-    public partial class Game
+    public class Game
     {
         public const string Version = "1.52.0.1700";
 
@@ -57,16 +62,16 @@ namespace MHServerEmu.Games
         private TimeSpan _fixedTimeUpdateProcessTimeLogThreshold;
         private long _frameCount;
 
-        private int _liveTuningChangeNum;
-
-        private Thread _gameThread;
+        private int _liveTuningChangeNum = -1;
 
         private ulong _currentRepId;
 
-        // Dumped ids: 0xF9E00000FA2B3EA (Lobby), 0xFF800000FA23AE9 (Tower), 0xF4A00000FA2B47D (Danger Room), 0xFCC00000FA29FE7 (Midtown)
+        private GameShutdownReason? _shutdownReason;
+
         public ulong Id { get; }
-        public bool IsRunning { get; private set; } = false;
-        public bool HasBeenShutDown { get; private set; } = false;
+        public GameManager GameManager { get; }
+
+        public GameState State { get; private set; } = GameState.Created;
 
         public GRandom Random { get; } = new();
         public PlayerConnectionManager NetworkManager { get; }
@@ -78,11 +83,14 @@ namespace MHServerEmu.Games
         public LootManager LootManager { get; }
         public GameDialogManager GameDialogManager { get; }
         public ChatManager ChatManager { get; }
-        public LiveTuningData LiveTuningData { get; private set; } = new();
+        public LiveTuningData LiveTuningData { get => LiveTuningData.Current; }
+
+        public ConditionPool ConditionPool { get; } = new();
 
         public TimeSpan FixedTimeBetweenUpdates { get; } = TimeSpan.FromMilliseconds(1000f / TargetFrameRate);
         public TimeSpan RealGameTime { get => (TimeSpan)_realGameTime; }
         public TimeSpan CurrentTime { get => GameEventScheduler != null ? GameEventScheduler.CurrentTime : _currentGameTime; }
+        public TimeSpan NextUpdateTime { get; private set; } = Clock.GameTime;
         public ulong NumQuantumFixedTimeUpdates { get => (ulong)CurrentTime.CalcNumTimeQuantums(FixedTimeBetweenUpdates); }
 
         public ulong CurrentRepId { get => ++_currentRepId; }
@@ -92,16 +100,15 @@ namespace MHServerEmu.Games
         public bool LeaderboardsEnabled { get; set; }
         public bool InfinitySystemEnabled { get => GameOptions.InfinitySystemEnabled; }
 
-        public int PlayerCount { get => EntityManager.PlayerCount; }
-
         public override string ToString() => $"serverGameId=0x{Id:X}";
 
-        public Game(ulong id)
+        public Game(ulong id, GameManager gameManager)
         {
-            // Small lags are fine, and logging all of them creates too much noise
-            _fixedTimeUpdateProcessTimeLogThreshold = FixedTimeBetweenUpdates * 2;
-
             Id = id;
+            GameManager = gameManager;
+
+            // Small lags are fine, and logging all of them creates too much noise
+            _fixedTimeUpdateProcessTimeLogThreshold = FixedTimeBetweenUpdates * 5;
 
             // Initialize game options
             var config = ConfigManager.Instance.GetConfig<GameOptionsConfig>();
@@ -131,6 +138,8 @@ namespace MHServerEmu.Games
         {
             bool success = true;
 
+            _gameTimer.Start();
+
             _realGameTime.SetQuantumSize(FixedTimeBetweenUpdates);
             _realGameTime.UpdateToNow();
             _currentGameTime = RealGameTime;
@@ -142,57 +151,51 @@ namespace MHServerEmu.Games
 
             OmegaMissionsEnabled = true;
 
-            LiveTuningManager.Instance.CopyLiveTuningData(LiveTuningData);
-            LiveTuningData.GetLiveTuningUpdate();   // pre-generate update protobuf
-            _liveTuningChangeNum = LiveTuningData.ChangeNum;
+            State = GameState.Running;
+            Logger.Info($"Game 0x{Id:X} started, initial replication id: {_currentRepId}");
 
             return success;
         }
 
-        public void Run()
-        {
-            // NOTE: This is now separate from the constructor so that we can have
-            // a dummy game with no simulation running that we use to parse messages.
-            if (IsRunning) throw new InvalidOperationException();
-            IsRunning = true;
-
-            // Initialize and start game thread
-            _gameThread = new(GameLoop) { Name = $"Game [{this}]", IsBackground = true, CurrentCulture = CultureInfo.InvariantCulture };
-            _gameThread.Start();
-
-            Logger.Info($"Game 0x{Id:X} started, initial replication id: {_currentRepId}");
-        }
-
         public void Shutdown(GameShutdownReason reason)
         {
-            if (IsRunning == false || HasBeenShutDown)
+            if (State != GameState.Running)
                 return;
 
-            Logger.Info($"Game shutdown requested. Game={this}, Reason={reason}");
+            Logger.Info($"Game [{this}] received shutdown request, reason={reason}");
 
-            // Clean up network manager
-            NetworkManager.SendAllPendingMessages();
-            foreach (PlayerConnection playerConnection in NetworkManager)
-                playerConnection.Disconnect();
-            NetworkManager.Update();        // We need this to process player saves (for now)
-
-            // Clean up entities
-            EntityManager.DestroyAllEntities();
-            EntityManager.ProcessDeferredLists();
-
-            // Clean up regions
-            RegionManager.DestroyAllRegions();
-
-            // Mark this game as shut down for the player manager
-            HasBeenShutDown = true;
+            _shutdownReason = reason;
+            State = GameState.ShuttingDown;
         }
 
-        public void RequestShutdown()
+        public void Update()
         {
-            if (IsRunning == false || HasBeenShutDown)
+            if (State == GameState.ShuttingDown)
+            {
+                DoShutdown();
                 return;
+            }
 
-            IsRunning = false;
+            using GameProfileTimer timer = new(Id, GamePerformanceMetricEnum.UpdateTime);
+
+            TimeSpan startTime = Clock.GameTime;
+
+            // NOTE: We process input in NetworkManager.ReceiveAllPendingMessages() outside of UpdateFixedTime(), same as the client.
+
+            NetworkManager.Update();                            // Add / remove clients
+            NetworkManager.ReceiveAllPendingMessages();         // Process input
+
+            UpdateLiveTuning();                                 // Check if live tuning data is out of date
+
+            UpdateFixedTime();                                  // Update simulation state
+
+            // Schedule the next update
+            TimeSpan endTime = Clock.GameTime;
+
+            if ((endTime - startTime) > FixedTimeBetweenUpdates)
+                NextUpdateTime = endTime + FixedTimeBetweenUpdates;
+            else
+                NextUpdateTime = startTime + FixedTimeBetweenUpdates;
         }
 
         public void AddClient(IFrontendClient client)
@@ -274,57 +277,10 @@ namespace MHServerEmu.Games
         public static long GetTimeFromStart(TimeSpan gameTime) => (long)(gameTime - StartTime).TotalMilliseconds;
         public static TimeSpan GetTimeFromDelta(long delta) => StartTime.Add(TimeSpan.FromMilliseconds(delta));
 
-        private void GameLoop()
-        {
-            Current = this;
-            _gameTimer.Start();
-
-            CollectionPoolSettings.UseThreadLocalStorage = true;
-            ObjectPoolManager.UseThreadLocalStorage = true;
-
-            try
-            {
-                while (IsRunning)
-                {
-                    Update();
-                }
-
-                Shutdown(GameShutdownReason.ServerShuttingDown);
-            }
-            catch (Exception e)
-            {
-                HandleGameInstanceCrash(e);
-                Shutdown(GameShutdownReason.GameInstanceCrash);
-            }
-        }
-
-        private void Update()
-        {
-            // NOTE: We process input in NetworkManager.ReceiveAllPendingMessages() outside of UpdateFixedTime(), same as the client.
-
-            NetworkManager.Update();                            // Add / remove clients
-            NetworkManager.ReceiveAllPendingMessages();         // Process input
-            NetworkManager.ProcessPendingPlayerConnections();   // Load pending players
-
-            RegionManager.Update();                             // Clean up old regions
-
-            UpdateLiveTuning();                                 // Check if live tuning data is out of date
-
-            UpdateFixedTime();                                  // Update simulation state
-        }
-
         private void UpdateFixedTime()
         {
             // First we make sure enough time has passed to do another fixed time update
             _realGameTime.UpdateToNow();
-
-            if (_currentGameTime + FixedTimeBetweenUpdates > RealGameTime)
-            {
-                // Thread.Sleep() can sleep for longer than specified, so rather than sleeping
-                // for the entire time window between fixed updates, we do it in 1 ms intervals.
-                Thread.Sleep(1);
-                return;
-            }
 
             int timesUpdated = 0;
 
@@ -340,33 +296,17 @@ namespace MHServerEmu.Games
                 timesUpdated++;
 
                 _lastFixedTimeUpdateProcessTime = _gameTimer.Elapsed - stepStartTime;
-                MetricsManager.Instance.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameTime, _lastFixedTimeUpdateProcessTime);
+
+                if (_lastFixedTimeUpdateProcessTime > _fixedTimeUpdateProcessTimeLogThreshold)
+                    Logger.Trace($"UpdateFixedTime(): Frame took longer ({_lastFixedTimeUpdateProcessTime.TotalMilliseconds:0.00} ms) than _fixedTimeUpdateWarningThreshold ({_fixedTimeUpdateProcessTimeLogThreshold.TotalMilliseconds:0.00} ms)");
 
                 // Record additional metrics
                 MetricsManager.Instance.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.EntityCount, EntityManager.EntityCount);
                 MetricsManager.Instance.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.PlayerCount, EntityManager.PlayerCount);
 
-                if (_lastFixedTimeUpdateProcessTime > _fixedTimeUpdateProcessTimeLogThreshold)
-                    Logger.Trace($"UpdateFixedTime(): Frame took longer ({_lastFixedTimeUpdateProcessTime.TotalMilliseconds:0.00} ms) than _fixedTimeUpdateWarningThreshold ({_fixedTimeUpdateProcessTimeLogThreshold.TotalMilliseconds:0.00} ms)");
-
                 // Bail out if we have fallen behind more exceeded frame budget
                 if (_gameTimer.Elapsed - updateStartTime > FixedTimeBetweenUpdates)
                     break;
-            }
-
-            // Track catch-up frames
-            if (timesUpdated > 1)
-            {
-                //Logger.Trace($"UpdateFixedTime(): Simulated {timesUpdated} frames in a single fixed update to catch up");
-                MetricsManager.Instance.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.CatchUpFrames, timesUpdated - 1);
-            }
-
-            // Skip time if we have fallen behind
-            TimeSpan timeSkip = RealGameTime - _currentGameTime;
-            if (timeSkip != TimeSpan.Zero)
-            {
-                //Logger.Trace($"UpdateFixedTime(): Taking too long to catch up, skipping {timeSkip.TotalMilliseconds} ms");
-                MetricsManager.Instance.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.TimeSkip, timeSkip);
             }
 
             _currentGameTime = RealGameTime;
@@ -374,89 +314,62 @@ namespace MHServerEmu.Games
 
         private void DoFixedTimeUpdate()
         {
-            TimeSpan referenceTime;
-            MetricsManager metrics = MetricsManager.Instance;
+            using GameProfileTimer timer = new(Id, GamePerformanceMetricEnum.FrameTime);
 
-            referenceTime = _gameTimer.Elapsed;
             ServiceMailbox.ProcessMessages();
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameProcessServiceMessagesTime, _gameTimer.Elapsed - referenceTime);
 
-            referenceTime = _gameTimer.Elapsed;
             GameEventScheduler.TriggerEvents(_currentGameTime);
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameTriggerEventsTime, _gameTimer.Elapsed - referenceTime);
 
-            referenceTime = _gameTimer.Elapsed;
             EntityManager.LocomoteEntities();
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameLocomoteEntitiesTime, _gameTimer.Elapsed - referenceTime);
 
-            referenceTime = _gameTimer.Elapsed;
             EntityManager.PhysicsResolveEntities();
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FramePhysicsResolveEntitiesTime, _gameTimer.Elapsed - referenceTime);
 
-            referenceTime = _gameTimer.Elapsed;
             EntityManager.ProcessDeferredLists();
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameProcessDeferredListsTime, _gameTimer.Elapsed - referenceTime);
 
-            // Send responses to all clients
-            referenceTime = _gameTimer.Elapsed;            
             NetworkManager.SendAllPendingMessages();
-            metrics.RecordGamePerformanceMetric(Id, GamePerformanceMetricEnum.FrameSendAllPendingMessagesTime, _gameTimer.Elapsed - referenceTime);
+        }
+
+        private void DoShutdown()
+        {
+            if (State != GameState.ShuttingDown)
+                return;
+
+            Logger.Info($"Game shutdown requested. Game={this}, Reason={_shutdownReason}");
+            NetworkManager.SendAllPendingMessages();
+            GameManager.OnGameShutdown(this);   // This will notify the PlayerManager and disconnect all players
+
+            // Wait for all players to leave the game (TODO?: let the thread do other work while we wait?)
+            while (NetworkManager.Count > 0)
+            {
+                NetworkManager.Update();
+                Thread.Sleep(1);
+            }
+
+            // Clean up entities
+            EntityManager.DestroyAllEntities();
+            EntityManager.ProcessDeferredLists();
+
+            // Clean up regions
+            RegionManager.DestroyAllRegions();
+
+            // Mark this game as shut down
+            State = GameState.Shutdown;
+
+            Logger.Info($"Game [{this}] finished shutting down");
+            MetricsManager.Instance.RemoveGameInstance(Id);
         }
 
         private void UpdateLiveTuning()
         {
-            // This won't do anything unless this game's live tuning data is out of date
-            LiveTuningManager.Instance.CopyLiveTuningData(LiveTuningData);  
+            LiveTuningData liveTuningData = LiveTuningData;
 
-            if (_liveTuningChangeNum != LiveTuningData.ChangeNum)
+            LiveTuningManager.Instance.CopyLiveTuningData(liveTuningData);  
+
+            if (_liveTuningChangeNum != liveTuningData.ChangeNum)
             {
-                NetworkManager.BroadcastMessage(LiveTuningData.GetLiveTuningUpdate());
-                _liveTuningChangeNum = LiveTuningData.ChangeNum;
+                NetworkManager.BroadcastMessage(liveTuningData.GetLiveTuningUpdate());
+                _liveTuningChangeNum = liveTuningData.ChangeNum;
             }
-        }
-
-        private void HandleGameInstanceCrash(Exception exception)
-        {
-#if DEBUG
-            const string buildConfiguration = "Debug";
-#elif RELEASE
-            const string buildConfiguration = "Release";
-#endif
-
-            DateTime now = DateTime.Now;
-
-            string crashReportDir = Path.Combine(FileHelper.ServerRoot, "CrashReports");
-            if (Directory.Exists(crashReportDir) == false)
-                Directory.CreateDirectory(crashReportDir);
-
-            string crashReportFilePath = Path.Combine(crashReportDir, $"GameInstanceCrash_{now.ToString(FileHelper.FileNameDateFormat)}.txt");
-
-            using (StreamWriter writer = new(crashReportFilePath))
-            {
-                writer.WriteLine(string.Format("Assembly Version: {0} | {1} UTC | {2}\n",
-                    AssemblyHelper.GetAssemblyInformationalVersion(),
-                    AssemblyHelper.ParseAssemblyBuildTime().ToString("yyyy.MM.dd HH:mm:ss"),
-                    buildConfiguration));
-
-                writer.WriteLine($"Local Server Time: {now:yyyy.MM.dd HH:mm:ss.fff}\n");
-
-                writer.WriteLine($"Game: {this}\n");
-
-                writer.WriteLine($"Exception:\n{exception}\n");
-
-                writer.WriteLine("Active Regions:");
-                foreach (Region region in RegionManager)
-                    writer.WriteLine(region.ToString());
-                writer.WriteLine();
-
-                writer.WriteLine("Scheduled Event Pool:");
-                writer.Write(GameEventScheduler.GetPoolReportString());
-                writer.WriteLine();
-
-                writer.WriteLine($"Server Status:\n{ServerManager.Instance.GetServerStatus(true)}\n");
-            }
-
-            Logger.ErrorException(exception, $"Game instance crashed, report saved to {crashReportFilePath}");
         }
     }
 }

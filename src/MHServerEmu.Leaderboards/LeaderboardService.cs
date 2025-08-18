@@ -19,21 +19,30 @@ namespace MHServerEmu.Leaderboards
         private readonly LeaderboardDatabase _database = LeaderboardDatabase.Instance;
         private readonly LeaderboardRewardManager _rewardManager = new();
 
-        private bool _isRunning;
+        private bool _isEnabled;
+
+        public GameServiceState State { get; private set; } = GameServiceState.Created;
 
         #region IGameService Implementation
 
         public void Run()
         {
-            var config = ConfigManager.Instance.GetConfig<GameOptionsConfig>();
-            _isRunning = config.LeaderboardsEnabled;
+            State = GameServiceState.Starting;
 
-            if (_isRunning == false)
+            var config = ConfigManager.Instance.GetConfig<GameOptionsConfig>();
+            _isEnabled = config.LeaderboardsEnabled;
+
+            if (_isEnabled == false)
+            {
+                State = GameServiceState.Running;
                 return;
+            }
 
             _database.Initialize(SQLiteLeaderboardDBManager.Instance);
 
-            while (_isRunning)
+            State = GameServiceState.Running;
+
+            while (State == GameServiceState.Running)
             {
                 // Update state for instances
                 _database.UpdateState();
@@ -46,31 +55,40 @@ namespace MHServerEmu.Leaderboards
 
                 Thread.Sleep(UpdateTimeMS);
             }
+
+            State = GameServiceState.Shutdown;
         }
 
         public void Shutdown() 
         {
-            _database?.Save();
-            _isRunning = false;
+            if (_isEnabled)
+            {
+                _database?.Save();
+                State = GameServiceState.ShuttingDown;
+            }
+            else
+            {
+                State = GameServiceState.Shutdown;
+            }
         }
 
         public void ReceiveServiceMessage<T>(in T message) where T : struct, IGameServiceMessage
         {
             switch (message)
             {
-                case GameServiceProtocol.RouteMessage routeMailboxMessage:
+                case ServiceMessage.RouteMessage routeMailboxMessage:
                     OnRouteMailboxMessage(routeMailboxMessage);
                     break;
 
-                case GameServiceProtocol.LeaderboardScoreUpdateBatch leaderboardScoreUpdateBatch:
+                case ServiceMessage.LeaderboardScoreUpdateBatch leaderboardScoreUpdateBatch:
                     _database.EnqueueLeaderboardScoreUpdate(leaderboardScoreUpdateBatch);
                     break;
 
-                case GameServiceProtocol.LeaderboardRewardRequest leaderboardRewardRequest:
+                case ServiceMessage.LeaderboardRewardRequest leaderboardRewardRequest:
                     _rewardManager.OnLeaderboardRewardRequest(leaderboardRewardRequest);
                     break;
 
-                case GameServiceProtocol.LeaderboardRewardConfirmation leaderboardRewardConfirmation:
+                case ServiceMessage.LeaderboardRewardConfirmation leaderboardRewardConfirmation:
                     _rewardManager.OnLeaderboardRewardConfirmation(leaderboardRewardConfirmation);
                     break;
 
@@ -85,7 +103,7 @@ namespace MHServerEmu.Leaderboards
             return $"Active Leaderboards: {(_database != null ? _database.LeaderboardCount : 0)}";
         }
 
-        private void OnRouteMailboxMessage(in GameServiceProtocol.RouteMessage routeMailboxMessage)
+        private void OnRouteMailboxMessage(in ServiceMessage.RouteMessage routeMailboxMessage)
         {
             if (routeMailboxMessage.Protocol != typeof(ClientToGameServerMessage))
             {

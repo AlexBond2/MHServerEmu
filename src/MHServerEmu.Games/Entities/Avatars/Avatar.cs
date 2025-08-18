@@ -52,7 +52,10 @@ namespace MHServerEmu.Games.Entities.Avatars
         private readonly EventPointer<TransformModeChangeEvent> _transformModeChangeEvent = new();
         private readonly EventPointer<TransformModeExitPowerEvent> _transformModeExitPowerEvent = new();
         private readonly EventPointer<UnassignMappedPowersForRespecEvent> _unassignMappedPowersForRespec = new();
-        private readonly EventPointer<RegionTeleportEvent> _regionTeleportEvent = new();
+        private readonly EventPointer<BodyslideTeleportToTownEvent> _bodyslideTeleportToTownEvent = new();
+        private readonly EventPointer<BodyslideTeleportFromTownEvent> _bodyslideTeleportFromTownEvent = new();
+        private readonly EventPointer<PowerTeleportEvent> _powerTeleportEvent = new();
+        private readonly EventPointer<DeathDialogEvent> _deathDialogEvent = new();
 
         private readonly EventPointer<EnableEnduranceRegenEvent>[] _enableEnduranceRegenEvents = new EventPointer<EnableEnduranceRegenEvent>[(int)ManaType.NumTypes];
         private readonly EventPointer<UpdateEnduranceEvent>[] _updateEnduranceEvents = new EventPointer<UpdateEnduranceEvent>[(int)ManaType.NumTypes];
@@ -163,11 +166,6 @@ namespace MHServerEmu.Games.Entities.Avatars
             OnLevelUp(level, level, false);
 
             return true;
-        }
-
-        protected override void ResurrectFromOther(WorldEntity ultimateOwner)
-        {
-            // TODO Ressurect for Avatar
         }
 
         protected override void BindReplicatedFields()
@@ -377,6 +375,7 @@ namespace MHServerEmu.Games.Entities.Avatars
                     return Logger.WarnReturn(ChangePositionResult.InvalidPosition, $"ChangeRegionPosition(): Invalid position {position.Value}");
 
                 player.BeginTeleport(RegionLocation.RegionId, position.Value, orientation != null ? orientation.Value : Orientation.Zero);
+                ConditionCollection.RemoveCancelOnIntraRegionTeleportConditions();
                 ExitWorld();
                 player.AOI.Update(position.Value);
                 result = ChangePositionResult.Teleport;
@@ -417,6 +416,17 @@ namespace MHServerEmu.Games.Entities.Avatars
             SecondaryResourceManaBehaviorPrototype secondaryManaBehaviorProto = GetSecondaryResourceManaBehavior();
             if (secondaryManaBehaviorProto != null && secondaryManaBehaviorProto.DepleteOnDeath)
                 Properties.RemoveProperty(PropertyEnum.SecondaryResource);
+
+            Properties.RemoveProperty(PropertyEnum.NumMissionAllies);
+
+            // Set up death release timeout
+            Game.GameEventScheduler.CancelEvent(_deathDialogEvent);
+
+            AvatarOnKilledInfoPrototype onKilledInfoProto = Region?.GetAvatarOnKilledInfo();
+            if (onKilledInfoProto != null)
+                ScheduleEntityEvent(_deathDialogEvent, TimeSpan.FromMilliseconds(onKilledInfoProto.DeathReleaseTimeoutMS));
+            else
+                Logger.Warn("OnKilled(): onKilledInfoProto == null");
         }
 
         public override bool Resurrect()
@@ -432,8 +442,35 @@ namespace MHServerEmu.Games.Entities.Avatars
                 Properties[PropertyEnum.Endurance, manaType] = endurance;
             }
 
+            Game.GameEventScheduler.CancelEvent(_deathDialogEvent);
+
             return success;
         }
+
+        public void ResurrectOtherAvatar(Avatar targetAvatar)
+        {
+            if (targetAvatar == null || targetAvatar.IsDead == false)
+                return;
+
+            if (IsInWorld == false)
+                return;
+
+            if (targetAvatar.Id == Properties[PropertyEnum.PendingResurrectEntityId])
+                return;
+
+            PrototypeId resurrectOtherEntityPower = AvatarPrototype.ResurrectOtherEntityPower;
+            if (resurrectOtherEntityPower == PrototypeId.Invalid)
+            {
+                Logger.Warn("ResurrectOtherAvatar(): resurrectOtherEntityPower == PrototypeId.Invalid");
+                return;
+            }
+
+            PowerActivationSettings settings = new(targetAvatar.Id, targetAvatar.RegionLocation.Position, RegionLocation.Position);
+            settings.Flags |= PowerActivationSettingsFlags.NotifyOwner;
+
+            if (ActivatePower(resurrectOtherEntityPower, ref settings) == PowerUseResult.Success)
+                Properties[PropertyEnum.PendingResurrectEntityId] = targetAvatar.Id;
+;        }
 
         public bool DoDeathRelease(DeathReleaseRequestType requestType)
         {
@@ -451,35 +488,105 @@ namespace MHServerEmu.Games.Entities.Avatars
             switch (requestType)
             {
                 case DeathReleaseRequestType.Checkpoint:
-                    AvatarOnKilledInfoPrototype avatarOnKilledInfo = region.GetAvatarOnKilledInfo();
-                    if (avatarOnKilledInfo == null) return Logger.WarnReturn(false, "DoDeathRelease(): avatarOnKilledInfo == null");
+                    AvatarOnKilledInfoPrototype onKilledInfoProto = region.GetAvatarOnKilledInfo();
+                    if (onKilledInfoProto == null) return Logger.WarnReturn(false, "DoDeathRelease(): onKilledInfoProto == null");
 
-                    if (avatarOnKilledInfo.DeathReleaseBehavior == DeathReleaseBehavior.ReturnToWaypoint)
+                    if (onKilledInfoProto.DeathReleaseBehavior == DeathReleaseBehavior.ReturnToWaypoint)
                     {
                         // Find the target for our respawn teleport
-                        PrototypeId deathReleaseTarget = FindDeathReleaseTarget();
-                        Logger.Trace($"DoDeathRelease(): {deathReleaseTarget.GetName()}");
+                        PrototypeId deathReleaseTarget = FindDeathReleaseTarget(out PrototypeId regionProtoRefOverride);
                         if (deathReleaseTarget == PrototypeId.Invalid)
                             return Logger.WarnReturn(false, "DoDeathRelease(): Failed to find a target to move to");
 
-                        Transition.TeleportToLocalTarget(owner, deathReleaseTarget);
+                        RegionConnectionTargetPrototype targetProto = deathReleaseTarget.As<RegionConnectionTargetPrototype>();
+                        if (targetProto == null) return Logger.WarnReturn(false, "DoDeathRelease(): targetProto == null");
+
+                        PrototypeId regionProtoRef = regionProtoRefOverride != PrototypeId.Invalid ? regionProtoRefOverride : targetProto.Region;
+                        PrototypeId areaProtoRef = targetProto.Area;
+                        PrototypeId cellProtoRef = GameDatabase.GetDataRefByAsset(targetProto.Cell);
+                        PrototypeId entityProtoRef = targetProto.Entity;
+
+                        Player player = GetOwnerOfType<Player>();
+
+                        using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+                        teleporter.Initialize(player, TeleportContextEnum.TeleportContext_Resurrect);
+                        return teleporter.TeleportToTarget(regionProtoRef, areaProtoRef, cellProtoRef, entityProtoRef);
                     }
                     else 
                     {
-                        return Logger.WarnReturn(false, $"DoDeathRelease(): Unimplemented behavior {avatarOnKilledInfo.DeathReleaseBehavior}");
+                        return Logger.WarnReturn(false, $"DoDeathRelease(): Unimplemented behavior {onKilledInfoProto.DeathReleaseBehavior}");
                     }
 
-                    break;
+                case DeathReleaseRequestType.Corpse:
+                    // No need to move.
+                    return true;
 
                 default:
                     return Logger.WarnReturn(false, $"DoDeathRelease(): Unimplemented request type {requestType}");
             }
+        }
+
+        public bool ResurrectRequest(ulong resurrectorId)
+        {
+            if (Properties[PropertyEnum.HasResurrectPending])
+                return true;
+
+            if (resurrectorId == InvalidId) return Logger.WarnReturn(false, "ResurrectRequest(): resurrectorId == InvalidId");
+
+            AvatarOnKilledInfoPrototype onKilledInfoProto = Region?.GetAvatarOnKilledInfo();
+            if (onKilledInfoProto == null) return Logger.WarnReturn(false, "ResurrectRequest(): onKilledInfoProto == null");
+
+            Game.GameEventScheduler.CancelEvent(_deathDialogEvent);
+            ScheduleEntityEvent(_deathDialogEvent, TimeSpan.FromMilliseconds(onKilledInfoProto.ResurrectionTimeoutMS));
+
+            Properties[PropertyEnum.HasResurrectPending] = true;
+
+            var resurrectRequestMessage = NetMessageOnResurrectRequest.CreateBuilder()
+                .SetTargetId(Id)
+                .SetResurrectorId(resurrectorId)
+                .Build();
+
+            Game.NetworkManager.SendMessageToInterested(resurrectRequestMessage, this, AOINetworkPolicyValues.AOIChannelProximity);
 
             return true;
         }
 
-        private PrototypeId FindDeathReleaseTarget()
+        public void ResurrectDecline()
         {
+            Properties[PropertyEnum.HasResurrectPending] = false;
+
+            var resurrectDeclineMessage = NetMessageOnResurrectDecline.CreateBuilder()
+                .SetTargetId(Id)
+                .Build();
+
+            Game.NetworkManager.SendMessageToInterested(resurrectDeclineMessage, this, AOINetworkPolicyValues.AOIChannelProximity);
+        }
+
+        protected override void ResurrectFromOther(WorldEntity ultimateOwner)
+        {
+            if (ultimateOwner == null)
+            {
+                Logger.Warn("ResurrectFromOther(): ultimateOwner == null");
+                return;
+            }
+
+            if (ultimateOwner is Avatar && ultimateOwner.Properties[PropertyEnum.PendingResurrectEntityId] == Id)
+            {
+                // Ask this player for confirmation if this is a resurrect from another player.
+                ultimateOwner.Properties.RemoveProperty(PropertyEnum.PendingResurrectEntityId);
+                ResurrectRequest(ultimateOwner.Id);
+            }
+            else
+            {
+                // Apply resurrection from other sources immediately.
+                Resurrect();
+            }
+        }
+
+        private PrototypeId FindDeathReleaseTarget(out PrototypeId regionProtoRefOverride)
+        {
+            regionProtoRefOverride = PrototypeId.Invalid;
+
             Region region = Region;
             if (region == null) return Logger.WarnReturn(PrototypeId.Invalid, "FindDeathReleaseTarget(): region == null");
 
@@ -489,7 +596,11 @@ namespace MHServerEmu.Games.Entities.Avatars
             Cell cell = Cell;
             if (cell == null) return Logger.WarnReturn(PrototypeId.Invalid, "FindDeathReleaseTarget(): cell == null");
 
-            var player = GetOwnerOfType<Player>();
+            Player player = GetOwnerOfType<Player>();
+
+            // Apply region overrides to terminal targets
+            if (region.Prototype.DailyCheckpointStartTarget)
+                regionProtoRefOverride = region.PrototypeDataRef;
 
             // Check if there is a hotspot override
             if (player != null)
@@ -519,6 +630,11 @@ namespace MHServerEmu.Games.Entities.Avatars
 
             // Fall back to the region's start target as the last resort
             return region.Prototype.StartTarget;
+        }
+
+        private void DeathDialogCallback()
+        {
+            DoDeathRelease(DeathReleaseRequestType.Checkpoint);
         }
 
         public PrototypeId GetRespawHotspotOverrideTarget(Player player)
@@ -557,28 +673,136 @@ namespace MHServerEmu.Games.Entities.Avatars
             Game.NetworkManager.SendMessageToInterested(message, this, AOINetworkPolicyValues.AOIChannelProximity | AOINetworkPolicyValues.AOIChannelOwner);
         }
 
+        /// <summary>
+        /// Checks if the provided position is valid to use as a start location. Chooses a random position nearby if it's not.
+        /// Returns <see langword="true"/> if the position is valid or was successfully adjusted.
+        /// </summary>c
+        public static bool AdjustStartPositionIfNeeded(Region region, ref Vector3 position, bool checkOtherAvatars = false, float boundsRadius = 64f)
+        {
+            Bounds bounds = new();
+            bounds.InitializeCapsule(boundsRadius, boundsRadius * 2f, BoundsCollisionType.Blocking, BoundsFlags.None);
+            bounds.Center = position;
+
+            PositionCheckFlags posFlags = PositionCheckFlags.CanBeBlockedEntity;
+            if (checkOtherAvatars)
+                posFlags |= PositionCheckFlags.CanBeBlockedAvatar;
+
+            BlockingCheckFlags blockFlags = BlockingCheckFlags.CheckGroundMovementPowers | BlockingCheckFlags.CheckLanding | BlockingCheckFlags.CheckSpawns;
+
+            // Do not modify the position if it's valid as is.
+            if (region.IsLocationClear(bounds, Navi.PathFlags.Walk, posFlags, blockFlags))
+                return true;
+
+            // Try to pick a replacement position.
+            if (region.ChooseRandomPositionNearPoint(bounds, Navi.PathFlags.Walk, posFlags, blockFlags & ~BlockingCheckFlags.CheckSpawns, 0f, 64f, out Vector3 newPosition, null, null, 50) == false)
+                return false;
+
+            position = newPosition;
+            return true;
+        }
+
         #endregion
 
         #region Teleports
 
-        public void ScheduleRegionTeleport(PrototypeId targetProtoRef, TimeSpan delay)
+        public void SetLastTownRegion(PrototypeId regionProtoRef)
         {
-            if (_regionTeleportEvent.IsValid)
-                Game.GameEventScheduler.CancelEvent(_regionTeleportEvent);
+            Properties[PropertyEnum.LastTownRegion] = regionProtoRef;
+
+            Player player = GetOwnerOfType<Player>();
+            if (player != null)
+                player.Properties[PropertyEnum.LastTownRegionForAccount] = regionProtoRef;
+        }
+
+        public bool ScheduleBodyslideTeleport()
+        {
+            Player player = GetOwnerOfType<Player>();
+            if (player == null) return Logger.WarnReturn(false, "ScheduleBodyslideTeleport(): player == null");
+
+            Region region = Region;
+            if (region == null) return Logger.WarnReturn(false, "ScheduleBodyslideTeleport(): region == null");
+
+            Area area = Area;
+            if (area == null) return Logger.WarnReturn(false, "ScheduleBodyslideTeleport(): area == null");
+
+            RegionPrototype regionProto = region.Prototype;
+            if (regionProto == null) return Logger.WarnReturn(false, "ScheduleBodyslideTeleport(): regionProto == null");
+
+            if (regionProto.Behavior != RegionBehavior.Town)    // -> To Town
+            {
+                if (regionProto.BodySliderOneWay == false)
+                {
+                    // Set bodyslider properties to be able to return to where we left
+                    player.Properties[PropertyEnum.BodySliderRegionId] = region.Id;
+                    player.Properties[PropertyEnum.BodySliderRegionRef] = region.PrototypeDataRef;
+                    player.Properties[PropertyEnum.BodySliderDifficultyRef] = region.DifficultyTierRef;
+                    player.Properties[PropertyEnum.BodySliderRegionSeed] = region.RandomSeed;
+                    player.Properties[PropertyEnum.BodySliderAreaRef] = area.PrototypeDataRef;
+                    player.Properties[PropertyEnum.BodySliderRegionPos] = RegionLocation.Position;
+                }
+                else
+                {
+                    // No return here
+                    player.RemoveBodysliderProperties();
+                }
+
+                ScheduleEntityEvent(_bodyslideTeleportToTownEvent, TimeSpan.Zero);
+            }
+            else if (player.HasBodysliderProperties())          // <- From Town
+            {
+                // From town
+                ScheduleEntityEvent(_bodyslideTeleportFromTownEvent, TimeSpan.Zero);
+            }
+
+            return true;
+        }
+
+        public void SchedulePowerTeleport(PrototypeId targetProtoRef, TimeSpan delay)
+        {
+            if (_powerTeleportEvent.IsValid)
+                Game.GameEventScheduler.CancelEvent(_powerTeleportEvent);
 
             if (IsDead)
                 Resurrect();
 
-            ScheduleEntityEvent(_regionTeleportEvent, delay, targetProtoRef);
+            ScheduleEntityEvent(_powerTeleportEvent, delay, targetProtoRef);
         }
 
-        private bool DoRegionTeleport(PrototypeId targetProtoRef)
+        private bool DoBodyslideTeleportToTown()
+        {
+            Player player = GetOwnerOfType<Player>();
+            if (player == null) return Logger.WarnReturn(false, "DoBodyslideTeleportToTown(): player == null");
+
+            PrototypeId bodyslideTargetRef = Bodyslider.GetBodyslideTargetRef(player);
+            if (bodyslideTargetRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "DoBodyslideTeleportToTown(): bodyslideTargetRef == PrototypeId.Invalid");
+
+            using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+            teleporter.Initialize(player, TeleportContextEnum.TeleportContext_Bodyslide);
+            return teleporter.TeleportToTarget(bodyslideTargetRef);
+        }
+
+        private bool DoBodyslideTeleportFromTown()
+        {
+            Player player = GetOwnerOfType<Player>();
+            if (player == null) return Logger.WarnReturn(false, "DoBodyslideTeleportFromTown(): player == null");
+
+            ulong regionId = player.Properties[PropertyEnum.BodySliderRegionId];
+            Vector3 position = player.Properties[PropertyEnum.BodySliderRegionPos];
+            player.RemoveBodysliderProperties();
+
+            using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+            teleporter.Initialize(player, TeleportContextEnum.TeleportContext_Bodyslide);
+            return teleporter.TeleportToRegionLocation(regionId, position);
+        }
+
+        private bool DoPowerTeleport(PrototypeId targetProtoRef)
         {
             Player player = GetOwnerOfType<Player>();
             if (player == null) return Logger.WarnReturn(false, "DoRegionTeleport(): player == null");
 
-            Transition.TeleportToTarget(player, targetProtoRef);
-            return true;
+            using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+            teleporter.Initialize(player, TeleportContextEnum.TeleportContext_Power);
+            return teleporter.TeleportToTarget(targetProtoRef);
         }
 
         #endregion
@@ -827,9 +1051,15 @@ namespace MHServerEmu.Games.Entities.Avatars
                 }
 
                 // Invoke the AvatarUsedPowerEvent
-                var player = GetOwnerOfType<Player>();
-                if (player != null)
-                    Region?.AvatarUsedPowerEvent.Invoke(new(player, this, powerRef, settings.TargetEntityId));
+                Player player = GetOwnerOfType<Player>();
+                Region region = Region;
+                if (player != null && region != null)
+                {
+                    region.AvatarUsedPowerEvent.Invoke(new(player, this, powerRef, settings.TargetEntityId));
+
+                    if (powerProto.PowerCategory == PowerCategoryType.EmotePower)
+                        region.EmotePerformedEvent.Invoke(new(player, powerRef));
+                }
             }
             else
             {
@@ -868,6 +1098,10 @@ namespace MHServerEmu.Games.Entities.Avatars
 
         public override void ActivatePostPowerAction(Power power, EndPowerFlags flags)
         {
+            // Clean up the property used for resurrecting other avatars if needed.
+            if (power.PrototypeDataRef == AvatarPrototype.ResurrectOtherEntityPower)
+                Properties.RemoveProperty(PropertyEnum.PendingResurrectEntityId);
+
             // Try to activate pending action (see CAvatar::ActivatePostPowerAction() for reference)
             if (ActivePowerRef == PrototypeId.Invalid && power.IsProcEffect() == false && power.TriggersComboPowerOnEvent(PowerEventType.OnPowerEnd) == false)
             {
@@ -1898,6 +2132,56 @@ namespace MHServerEmu.Games.Entities.Avatars
                 return 0;
 
             return player.PowerSpecIndexUnlocked;
+        }
+
+        public bool SetActivePowerSpec(int newSpecIndex)
+        {
+            if (newSpecIndex < 0) return Logger.WarnReturn(false, "SetActivePowerSpec(): specIndex < 0");
+
+            int currentSpecIndex = GetPowerSpecIndexActive();
+            if (newSpecIndex == currentSpecIndex)
+                return true;
+
+            if (newSpecIndex > GetPowerSpecIndexUnlocked())
+                return false;
+
+            if (Properties.HasProperty(PropertyEnum.IsInCombat))
+                return false;
+
+            // Unassign talents
+            List<PrototypeId> talentPowerList = ListPool<PrototypeId>.Instance.Get();
+            GetTalentPowersForSpec(currentSpecIndex, talentPowerList);
+
+            foreach (PrototypeId talentPowerRef in talentPowerList)
+                UnassignTalentPower(talentPowerRef, currentSpecIndex, true);
+
+            ListPool<PrototypeId>.Instance.Return(talentPowerList);
+
+            // Clear mapped powers
+            if (CanStealPowers() == false)
+                UnassignAllMappedPowers();
+
+            // "Unequip" powers for the spec we are disabling
+            if (IsInWorld)
+                UnequipPowersForCurrentSpec();
+
+            // Change spec
+            Properties[PropertyEnum.PowerSpecIndexActive] = newSpecIndex;
+
+            // Refresh powers
+            if (IsInWorld)
+            {
+                UpdateTalentPowers();
+                UpdatePowerProgressionPowers(true);
+            }
+
+            RefreshAbilityKeyMapping(false); // false because the client will do it on its own when it handles the change in PowerSpecIndexActive
+            
+            // "Equip" powers for the spec we enabled
+            if (IsInWorld)
+                EquipPowersForCurrentSpec();
+
+            return false;
         }
 
         public override bool RespecPowerSpec(int specIndex, PowersRespecReason reason, bool skipValidation = false, PrototypeId powerProtoRef = PrototypeId.Invalid)
@@ -3054,6 +3338,30 @@ namespace MHServerEmu.Games.Entities.Avatars
             }
 
             return true;
+        }
+
+        private void UnequipPowersForCurrentSpec()
+        {
+            AbilityKeyMapping keyMapping = _currentAbilityKeyMapping;
+            if (keyMapping == null) return;
+
+            for (AbilitySlot slot = AbilitySlot.PrimaryAction; slot < AbilitySlot.NumActions; slot++)
+            {
+                Power power = GetPowerInSlot(slot);
+                power?.OnUnequipped();
+            }
+        }
+
+        private void EquipPowersForCurrentSpec()
+        {
+            AbilityKeyMapping keyMapping = _currentAbilityKeyMapping;
+            if (keyMapping == null) return;
+
+            for (AbilitySlot slot = AbilitySlot.PrimaryAction; slot < AbilitySlot.NumActions; slot++)
+            {
+                Power power = GetPowerInSlot(slot);
+                power?.OnEquipped();
+            }
         }
 
         private AbilityKeyMapping GetOrCreateAbilityKeyMapping(int powerSpecIndex, PrototypeId transformModeProtoRef)
@@ -5384,19 +5692,18 @@ namespace MHServerEmu.Games.Entities.Avatars
             }
 
             Properties.RemoveProperty(PropertyEnum.LastTownRegion);
-            foreach (PropertyEnum bodysliderProp in Property.BodysliderProperties)
-                Properties.RemoveProperty(bodysliderProp);
 
-            bool success = missionManager.ResetAvatarMissionsForStoryWarp(chapterProtoRef, true);
+            player.RemoveBodysliderProperties();
 
-            if (success == false)
+            if (missionManager.ResetAvatarMissionsForStoryWarp(chapterProtoRef, true) == false)
                 Logger.Warn($"ResetMissions(): Failed to reset missions for avatar [{this}]");
 
-            // TODO: Fix this when we overhaul the teleport system
-            player.TEMP_ScheduleMoveToTarget(targetProto.DataRef, TimeSpan.FromMilliseconds(500));
-            // TODO: Reset map discovery data
+            player.ResetMapDiscoveryForStoryWarp();
 
-            return success;
+            using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+            teleporter.DifficultyTierRef = GameDatabase.GlobalsPrototype.DifficultyTierDefault;
+            teleporter.Initialize(player, TeleportContextEnum.TeleportContext_StoryWarp);
+            return teleporter.TeleportToTarget(targetProto.DataRef);
         }
 
         public bool ActivatePrestigeMode()
@@ -6182,6 +6489,7 @@ namespace MHServerEmu.Games.Entities.Avatars
 
             UpdateTimePlayed(player);
 
+            Properties.RemoveProperty(PropertyEnum.NumMissionAllies);
             Properties.RemovePropertyRange(PropertyEnum.PowersRespecResult);
 
             // Store missions to Avatar
@@ -6192,6 +6500,7 @@ namespace MHServerEmu.Games.Entities.Avatars
             scheduler.CancelEvent(_refreshStatsPowerEvent);
             scheduler.CancelEvent(_transformModeExitPowerEvent);
             scheduler.CancelEvent(_transformModeChangeEvent);
+            scheduler.CancelEvent(_deathDialogEvent);
 
             // Remove summoner conditions
             foreach (var summon in new SummonedEntityIterator(this))
@@ -6354,9 +6663,24 @@ namespace MHServerEmu.Games.Entities.Avatars
             protected override CallbackDelegate GetCallback() => (t) => ((Avatar)t).UnassignMappedPowersForRespec();
         }
 
-        private class RegionTeleportEvent : CallMethodEventParam1<Entity, PrototypeId>
+        private class BodyslideTeleportToTownEvent : CallMethodEvent<Entity>
         {
-            protected override CallbackDelegate GetCallback() => (t, p1) => ((Avatar)t).DoRegionTeleport(p1);
+            protected override CallbackDelegate GetCallback() => (t) => ((Avatar)t).DoBodyslideTeleportToTown();
+        }
+
+        private class BodyslideTeleportFromTownEvent : CallMethodEvent<Entity>
+        {
+            protected override CallbackDelegate GetCallback() => (t) => ((Avatar)t).DoBodyslideTeleportFromTown();
+        }
+
+        private class PowerTeleportEvent : CallMethodEventParam1<Entity, PrototypeId>
+        {
+            protected override CallbackDelegate GetCallback() => (t, p1) => ((Avatar)t).DoPowerTeleport(p1);
+        }
+
+        private class DeathDialogEvent : CallMethodEvent<Entity>
+        {
+            protected override CallbackDelegate GetCallback() => (t) => ((Avatar)t).DeathDialogCallback();
         }
 
         #endregion

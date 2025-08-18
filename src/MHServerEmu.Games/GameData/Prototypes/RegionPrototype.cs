@@ -173,6 +173,8 @@ namespace MHServerEmu.Games.GameData.Prototypes
         public bool IsPublic { get => Behavior == RegionBehavior.Town || Behavior == RegionBehavior.PublicCombatZone || Behavior == RegionBehavior.MatchPlay; }
         [DoNotCopy]
         public bool IsPrivate { get => IsPublic == false; }
+        [DoNotCopy]
+        public TimeSpan Lifetime { get; private set; }
 
         private Dictionary<AssetId, List<LootTableAssignmentPrototype>> _lootTableMap = new();
 
@@ -185,7 +187,15 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
         private bool HasAltRegion(PrototypeId dataRef)
         {
-            if (AltRegions != null) return AltRegions.Contains(dataRef);
+            if (AltRegions.IsNullOrEmpty())
+                return false;
+
+            foreach (PrototypeId altRegionProtoRef in AltRegions)
+            {
+                if (altRegionProtoRef == dataRef)
+                    return true;
+            }
+
             return false;
         }
 
@@ -290,6 +300,8 @@ namespace MHServerEmu.Games.GameData.Prototypes
             }
 
             // ClientMapOverrides client only
+
+            Lifetime = TimeSpan.FromMinutes(LifetimeInMinutes);
         }
 
         public static PrototypeId ConstrainDifficulty(PrototypeId regionProtoRef, PrototypeId difficultyTierProtoRef)
@@ -486,7 +498,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             return PrototypeId.Invalid;
         }
 
-        public bool HasEndless()
+        public bool HasEndlessTheme()
         {
             return RegionGenerator is SequenceRegionGeneratorPrototype sequenceRegion && sequenceRegion.EndlessThemes.HasValue();
         }

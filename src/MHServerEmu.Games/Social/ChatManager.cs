@@ -89,8 +89,8 @@ namespace MHServerEmu.Games.Social
         public void HandleTell(Player player, NetMessageTell tell)
         {
             // Route to the grouping manager
-            GameServiceProtocol.GroupingManagerTell serviceMessage = new(player.PlayerConnection.FrontendClient, tell);
-            ServerManager.Instance.SendMessageToService(ServerType.GroupingManager, serviceMessage);
+            ServiceMessage.GroupingManagerTell serviceMessage = new(player.PlayerConnection.FrontendClient, tell);
+            ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, serviceMessage);
         }
 
         public void HandleReportPlayer(Player player, NetMessageReportPlayer reportPlayer)
@@ -219,8 +219,8 @@ namespace MHServerEmu.Games.Social
         private void SendChat(Player player, NetMessageChat chat, List<ulong> playerFilter)
         {
             int prestigeLevel = player.CurrentAvatar != null ? player.CurrentAvatar.PrestigeLevel : 0;
-            GameServiceProtocol.GroupingManagerChat chatMessage = new(player.PlayerConnection.FrontendClient, chat, prestigeLevel, playerFilter);
-            ServerManager.Instance.SendMessageToService(ServerType.GroupingManager, chatMessage);
+            ServiceMessage.GroupingManagerChat chatMessage = new(player.PlayerConnection.FrontendClient, chat, prestigeLevel, playerFilter);
+            ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, chatMessage);
         }
 
         #endregion

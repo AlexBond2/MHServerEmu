@@ -12,11 +12,18 @@ namespace MHServerEmu.Frontend
     {
         private new static readonly Logger Logger = LogManager.CreateLogger();  // Hide the Server.Logger so that this logger can show the actual server as log source.
 
+        private readonly HashSet<FrontendClient> _clients = new();
+
+        public GameServiceState State { get; private set; } = GameServiceState.Created;
+
         #region IGameService Implementation
 
         public override void Run()
         {
             var config = ConfigManager.Instance.GetConfig<FrontendConfig>();
+
+            IFrontendClient.FrontendAddress = config.PublicAddress;
+            IFrontendClient.FrontendPort = config.Port;
 
             // -1 indicates infinite duration for both Task.Delay() and Socket.SendTimeout
             _receiveTimeoutMS = config.ReceiveTimeoutMS > 0 ? config.ReceiveTimeoutMS : -1;
@@ -26,9 +33,14 @@ namespace MHServerEmu.Frontend
                 return;
             
             Logger.Info($"FrontendServer is listening on {config.BindIP}:{config.Port}...");
+            State = GameServiceState.Running;
         }
 
-        // Shutdown implemented by TcpServer
+        public override void Shutdown()
+        {
+            base.Shutdown();
+            State = GameServiceState.Shutdown;
+        }
 
         public void ReceiveServiceMessage<T>(in T message) where T : struct, IGameServiceMessage
         {
@@ -42,7 +54,7 @@ namespace MHServerEmu.Frontend
 
         public string GetStatus()
         {
-            return $"Connections: {ConnectionCount}";
+            return $"Connections: {ConnectionCount} | Clients: {_clients.Count}";
         }
 
         #endregion
@@ -52,7 +64,8 @@ namespace MHServerEmu.Frontend
         protected override void OnClientConnected(TcpClientConnection connection)
         {
             Logger.Info($"Client connected from {connection}");
-            connection.Client = new FrontendClient(connection);
+
+            _clients.Add(new FrontendClient(connection));
         }
 
         protected override void OnClientDisconnected(TcpClientConnection connection)
@@ -61,6 +74,8 @@ namespace MHServerEmu.Frontend
             Logger.Info($"Client [{client}] disconnected");
 
             client.OnDisconnected();
+
+            _clients.Remove(client);
         }
 
         protected override void OnDataReceived(TcpClientConnection connection, byte[] buffer, int length)

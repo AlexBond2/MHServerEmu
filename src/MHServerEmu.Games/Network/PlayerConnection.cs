@@ -46,19 +46,17 @@ namespace MHServerEmu.Games.Network
         private readonly IFrontendClient _frontendClient;
         private readonly DBAccount _dbAccount;
 
-        private bool _waitingForRegionIsAvailableResponse = false;
         private bool _doNotUpdateDBAccount = false;
-        private bool _isFirstLoad = true;
 
         public Game Game { get; }
 
         public AreaOfInterest AOI { get; }
-        public WorldView WorldView { get; }
+        public WorldViewCache WorldView { get; }
         public TransferParams TransferParams { get; }
-        public RegionContext RegionContext { get; }
-        public MigrationData MigrationData { get; }
 
         public Player Player { get; private set; }
+
+        public bool HasPendingRegionTransfer { get; private set; }
 
         public ulong PlayerDbId { get => (ulong)_dbAccount.Id; }
         public long GazillioniteBalance { get => _dbAccount.Player.GazillioniteBalance; set => _dbAccount.Player.GazillioniteBalance = value; }
@@ -77,8 +75,6 @@ namespace MHServerEmu.Games.Network
             AOI = new(this);
             WorldView = new(this);
             TransferParams = new(this);
-            MigrationData = new();
-            RegionContext = new();
         }
 
         public override string ToString()
@@ -95,16 +91,10 @@ namespace MHServerEmu.Games.Network
                 return Logger.WarnReturn(false, $"Initialize(): Failed to load player data from DBAccount {_dbAccount}");
             }
 
-            // Send achievement database
-            SendMessage(AchievementDatabase.Instance.GetDump());
+            // Send the achievement database if this is not a transfer from another game.
+            if (_dbAccount.MigrationData.IsFirstLoad)
+                SendMessage(AchievementDatabase.Instance.GetDump());
 
-            // Query if our initial loading region is available (has assets) on the client.
-            // Trying to load an unavailable region will get the client stuck in an infinite loading screen.
-            SendMessage(NetMessageQueryIsRegionAvailable.CreateBuilder()
-                .SetRegionPrototype((ulong)TransferParams.DestTargetRegionProtoRef)
-                .Build());
-
-            _waitingForRegionIsAvailableResponse = true;
             return true;
         }
 
@@ -130,11 +120,7 @@ namespace MHServerEmu.Games.Network
 
             DataDirectory dataDirectory = GameDatabase.DataDirectory;
             EntityManager entityManager = Game.EntityManager;
-
-            // Initialize transfer params
-            // FIXME: RawWaypoint should be either a region connection target or a waypoint proto ref that we get our connection target from
-            // We should get rid of saving waypoint refs and just use connection targets.
-            TransferParams.SetTarget((PrototypeId)_dbAccount.Player.StartTarget, (PrototypeId)_dbAccount.Player.StartTargetRegionOverride);
+            MigrationData migrationData = _dbAccount.MigrationData;
 
             // Initialize AOI
             AOI.AOIVolume = _dbAccount.Player.AOIVolume;
@@ -170,6 +156,10 @@ namespace MHServerEmu.Games.Network
             if (Player == null)
                 throw new($"InitializeFromDBAccount(): Failed to create player entity for {_dbAccount}");
 
+            // Restore migrated data
+            MigrationUtility.RestoreProperties(migrationData.PlayerProperties, Player.Properties);
+            MigrationUtility.RestoreWorldView(migrationData, WorldView);
+
             // Add all badges to admin accounts
             if (_dbAccount.UserLevel == AccountUserLevel.Admin)
             {
@@ -180,7 +170,6 @@ namespace MHServerEmu.Games.Network
             // TODO: Improve new player detection
             if (_dbAccount.Player.ArchiveData.IsNullOrEmpty())
             {
-                TransferParams.SetTarget(GameDatabase.GlobalsPrototype.DefaultStartTargetStartingRegion);
                 Player.InitializeMissionTrackerFilters();
                 Logger.Trace($"Initialized default mission filters for {Player}");
 
@@ -221,7 +210,7 @@ namespace MHServerEmu.Games.Network
         /// <summary>
         /// Updates the <see cref="DBAccount"/> instance bound to this <see cref="PlayerConnection"/>.
         /// </summary>
-        private bool UpdateDBAccount()
+        private bool UpdateDBAccount(bool updateMigrationData)
         {
             if (_doNotUpdateDBAccount)
                 return true;
@@ -239,11 +228,37 @@ namespace MHServerEmu.Games.Network
                     _dbAccount.Player.ArchiveData = archive.AccessAutoBuffer().ToArray();
                 }
 
-                _dbAccount.Player.StartTarget = (long)TransferParams.DestTargetProtoRef;
-                _dbAccount.Player.StartTargetRegionOverride = (long)TransferParams.DestTargetRegionProtoRef;    // Sometimes connection target region is overriden (e.g. banded regions)
+                // Save last town as a separate database field to be able to access it without deserializing the player entity
+                PrototypeId lastTownProtoRef = Player.Properties[PropertyEnum.LastTownRegionForAccount];
+                if (lastTownProtoRef != PrototypeId.Invalid)
+                {
+                    RegionPrototype lastTownProto = lastTownProtoRef.As<RegionPrototype>();
+                    _dbAccount.Player.StartTarget = (long)lastTownProto.StartTarget;
+                }
+                else
+                {
+                    _dbAccount.Player.StartTarget = (long)GameDatabase.GlobalsPrototype.DefaultStartTargetStartingRegion;
+                }
+
                 _dbAccount.Player.AOIVolume = (int)AOI.AOIVolume;
 
                 PersistenceHelper.StoreInventoryEntities(Player, _dbAccount);
+
+                // Update migration data unless requested not to
+                MigrationData migrationData = _dbAccount.MigrationData;
+                
+                if (migrationData.SkipNextUpdate == false)
+                {
+                    if (updateMigrationData)
+                    {
+                        MigrationUtility.StoreProperties(migrationData.PlayerProperties, Player.Properties);
+                        MigrationUtility.StoreWorldView(migrationData, WorldView);
+                    }
+                }
+                else
+                {
+                    migrationData.SkipNextUpdate = false;
+                }
             }
 
             Logger.Trace($"Updated DBAccount {_dbAccount}");
@@ -257,67 +272,112 @@ namespace MHServerEmu.Games.Network
         public override void OnDisconnect()
         {
             // Post-disconnection cleanup (save data, remove entities, etc).
-            UpdateDBAccount();
+            UpdateDBAccount(true);
 
             AOI.SetRegion(0, true);
-
-            Player?.Destroy();
-
-            // Destroy all private region instances in the world view since they are not persistent anyway
-            foreach (var kvp in WorldView)
+            if (Player != null)
             {
-                Region region = Game.RegionManager.GetRegion(kvp.Value);
-                if (region == null) continue;
-
-                if (region.IsPublic)
-                {
-                    Logger.Warn($"OnDisconnect(): Found public region {region} in the world view for player connection {this}");
-                    continue;
-                }
-
-                region.RequestShutdown();
+                Player.QueueLoadingScreen(PrototypeId.Invalid);
+                Player.Destroy();
             }
 
-            // Remove game id to let the player manager know that it is now safe to write to the database.
-            // TODO: Replace this with a player manager message.
-            _frontendClient.GameId = 0;
+            // Notify the player manager
+            Game.GameManager.OnClientRemoved(Game, _frontendClient);
 
             Logger.Info($"Removed frontend client [{_frontendClient}] from game [{Game}]");
         }
 
         #endregion
 
-        #region Loading and Exiting
+        #region Region Transfers
 
-        public void MoveToTarget(PrototypeId targetProtoRef, PrototypeId regionProtoRefOverride = PrototypeId.Invalid)
+        public void BeginRegionTransfer(PrototypeId remoteRegionProtoRef)
         {
             var oldRegion = AOI.Region;
 
-            // Update our target
-            TransferParams.SetTarget(targetProtoRef, regionProtoRefOverride);
-
-            oldRegion?.PlayerBeginTravelToRegionEvent.Invoke(new(Player, TransferParams.DestTargetRegionProtoRef));
+            oldRegion?.PlayerBeginTravelToRegionEvent.Invoke(new(Player, remoteRegionProtoRef));
 
             // The message for the loading screen we are queueing here will be flushed to the client
             // as soon as we set the connection as pending to keep things nice and responsive.
-            Player.QueueLoadingScreen(TransferParams.DestTargetRegionProtoRef);
+            Player.QueueLoadingScreen(remoteRegionProtoRef);
 
             oldRegion?.PlayerLeftRegionEvent.Invoke(new(Player, oldRegion.PrototypeDataRef));
 
-            // Simulate exiting and re-entering the game on a real GIS
-            ExitGame();
+            // Exit world and save
+            Player.CurrentAvatar.ExitWorld();
 
-            Game.NetworkManager.SetPlayerConnectionPending(this);
+            Stopwatch stopwatch = Stopwatch.StartNew();
+
+            UpdateDBAccount(false);
+
+            stopwatch.Stop();
+            if (stopwatch.Elapsed > TimeSpan.FromMilliseconds(300))
+                Logger.Warn($"ExitGame() took {stopwatch.Elapsed.TotalMilliseconds} ms for {this}");
+
+            HasPendingRegionTransfer = true;
         }
 
-        public void EnterGame()
+        public void CancelRegionTransfer(ChangeRegionFailed changeFailed)
         {
-            // NOTE: What's most likely supposed to be happening here is the player should load into a lobby region
-            // where their data is loaded from the database, and then we exit the lobby and teleport into our destination region.
+            HasPendingRegionTransfer = false;
 
-            Player.EnterGame();     // This makes the player entity and things owned by it (avatars and so on) enter our AOI
+            if (changeFailed.Reason == RegionTransferFailure.eRTF_BodyslideRegionUnavailable)
+                Player.RemoveBodysliderProperties();
 
-            if (_isFirstLoad)
+            // Try to put the player back into the world
+            Region region = Player.GetRegion();
+            if (region != null)
+            {
+                Avatar avatar = Player.CurrentAvatar;
+                if (avatar != null && avatar.IsInWorld == false)
+                {
+                    RegionLocationSafe exitLocation = avatar.ExitWorldRegionLocation;
+                    ulong regionId = exitLocation.RegionId;
+                    Vector3 position = exitLocation.Position;
+                    Orientation orientation = exitLocation.Orientation;
+
+                    if (region.Id == regionId && avatar.EnterWorld(region, position, orientation))
+                    {
+                        Player.DequeueLoadingScreen();
+                    }
+                    else
+                    {
+                        Logger.Warn($"CancelRemoteTeleport(): Failed to put player [{this}] back into the game world");
+                        Disconnect();
+                        return;
+                    }
+                }
+            }
+
+            // Relay the notification to the client to display an error message.
+            SendMessage(NetMessageUnableToChangeRegion.CreateBuilder()
+                .SetChangeFailed(changeFailed)
+                .Build());
+        }
+
+        public void FinishRegionTransfer(NetStructTransferParams transferParams, List<(ulong, ulong)> worldViewSyncData)
+        {
+            TransferParams.SetFromProtobuf(transferParams);
+
+            // This is where we would previously send NetMessageQueryIsRegionAvailable.
+
+            HasPendingRegionTransfer = false;
+
+            EnterGame();
+
+            ServiceMessage.RegionTransferFinished message = new(PlayerDbId, transferParams.TransferId);
+            ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, message);
+
+            // Sync WorldViewCache
+            WorldView.Sync(worldViewSyncData);
+        }
+
+        private void EnterGame()
+        {
+            if (Player.IsInGame == false)
+                Player.EnterGame();     // This makes the player entity and things owned by it (avatars, items and so on) enter the client's AOI.
+
+            if (_dbAccount.MigrationData.IsFirstLoad)
             {
                 // Recount and update achievements
                 Player.AchievementManager.RecountAchievements();
@@ -331,27 +391,20 @@ namespace MHServerEmu.Games.Network
 
                 Player.CheckDailyLogin();
 
-                _isFirstLoad = false;
+                _dbAccount.MigrationData.IsFirstLoad = false;
             }
 
             // Clear region interest by setting it to invalid region, we still keep our owned entities
             AOI.SetRegion(0, false, null, null);
+            Player.QueueLoadingScreen(TransferParams.DestRegionProtoRef);
 
-            PrototypeId regionProtoRef = TransferParams.DestTargetRegionProtoRef;
-
-            Player.QueueLoadingScreen(regionProtoRef);
-
-            RegionContext.RegionDataRef = regionProtoRef;
-            Region region = Game.RegionManager.GetOrGenerateRegionForPlayer(RegionContext, this);
+            Region region = Game.RegionManager.GetRegion(TransferParams.DestRegionId);
             if (region == null)
             {
-                Logger.Error($"EnterGame(): Failed to get or generate region {regionProtoRef.GetName()}");
-                TransferParams.SetTarget(GameDatabase.GlobalsPrototype.DefaultStartTargetFallbackRegion);  // Reset transfer target so that the player can recover on relog
+                Logger.Error($"EnterGame(): Region 0x{TransferParams.DestRegionId:X} not found");
                 Disconnect();
                 return;
             }
-
-            TransferParams.DestRegionId = region.Id;
 
             if (TransferParams.FindStartLocation(out Vector3 startPosition, out Orientation startOrientation) == false)
             {
@@ -368,32 +421,10 @@ namespace MHServerEmu.Games.Network
 
             Player.SendFullscreenMovieSync();
 
+            if (region.CanBeLastTown)
+                Player.CurrentAvatar?.SetLastTownRegion(region.PrototypeDataRef);
+
             Player.ScheduleCommunityBroadcast();
-        }
-
-        public void ExitGame()
-        {
-            // We need to recreate the player entity when we transfer between regions because client UI breaks
-            // when we reuse the same player entity id (e.g. inventory grid stops updating).
-            Stopwatch stopwatch = Stopwatch.StartNew();
-            
-            // Player entity exiting the game removes it from its AOI and also removes the current avatar from the world.
-            Player.ExitGame();
-
-            // We need to save data after we exit the game to include data that gets
-            // saved when the current avatar exits world (e.g. mission progress).
-            UpdateDBAccount();
-
-            // Destroy
-            Player.Destroy();
-            Game.EntityManager.ProcessDeferredLists();
-
-            // Recreate player
-            LoadFromDBAccount();
-
-            stopwatch.Stop();
-            if (stopwatch.Elapsed > TimeSpan.FromMilliseconds(300))
-                Logger.Warn($"ExitGame() took {stopwatch.Elapsed.TotalMilliseconds} ms for {this}");
         }
 
         #endregion
@@ -452,6 +483,8 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageAbilitySwapInAbilityBar:           OnAbilitySwapInAbilityBar(message); break;          // 48
                 case ClientToGameServerMessage.NetMessagePowerRecentlyUnlocked:             OnPowerRecentlyUnlocked(message); break;            // 51
                 case ClientToGameServerMessage.NetMessageRequestDeathRelease:               OnRequestDeathRelease(message); break;              // 52
+                case ClientToGameServerMessage.NetMessageRequestResurrectDecline:           OnRequestResurrectDecline(message); break;          // 53
+                case ClientToGameServerMessage.NetMessageRequestResurrectAvatar:            OnRequestResurrectAvatar(message); break;           // 54
                 case ClientToGameServerMessage.NetMessageReturnToHub:                       OnReturnToHub(message); break;                      // 55
                 case ClientToGameServerMessage.NetMessageRequestMissionRewards:             OnRequestMissionRewards(message); break;            // 57
                 case ClientToGameServerMessage.NetMessageRequestRemoveAndKillControlledAgent:   OnRequestRemoveAndKillControlledAgent(message); break;   // 58
@@ -461,6 +494,9 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageTell:                              OnTell(message); break;                             // 65
                 case ClientToGameServerMessage.NetMessageReportPlayer:                      OnReportPlayer(message); break;                     // 66
                 case ClientToGameServerMessage.NetMessageChatBanVote:                       OnChatBanVote(message); break;                      // 67
+                case ClientToGameServerMessage.NetMessageGetCatalog:                        OnGetCatalog(message); break;                       // 68
+                case ClientToGameServerMessage.NetMessageGetCurrencyBalance:                OnGetCurrencyBalance(message); break;               // 69
+                case ClientToGameServerMessage.NetMessageBuyItemFromCatalog:                OnBuyItemFromCatalog(message); break;               // 70
                 case ClientToGameServerMessage.NetMessagePurchaseUnlock:                    OnPurchaseUnlock(message); break;                   // 72
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieStarted:      OnNotifyFullscreenMovieStarted(message); break;     // 84
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieFinished:     OnNotifyFullscreenMovieFinished(message); break;    // 85
@@ -499,6 +535,7 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageVanityTitleSelect:                 OnVanityTitleSelect(message); break;                // 140
                 case ClientToGameServerMessage.NetMessagePlayerTradeCancel:                 OnPlayerTradeCancel(message); break;                // 144
                 case ClientToGameServerMessage.NetMessageRequestPetTechDonate:              OnRequestPetTechDonate(message); break;             // 146
+                case ClientToGameServerMessage.NetMessageSetActivePowerSpec:                OnSetActivePowerSpec(message); break;               // 147
                 case ClientToGameServerMessage.NetMessageChangeCameraSettings:              OnChangeCameraSettings(message); break;             // 148
                 case ClientToGameServerMessage.NetMessageUISystemLockState:                 OnUISystemLockState(message); break;                // 150
                 case ClientToGameServerMessage.NetMessageEnableTalentPower:                 OnEnableTalentPower(message); break;                // 151
@@ -512,23 +549,8 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageMissionTrackerFiltersUpdate:           OnMissionTrackerFiltersUpdate(message); break;              // 166
                 case ClientToGameServerMessage.NetMessageAchievementMissionTrackerFilterChange: OnAchievementMissionTrackerFilterChange(message); break;    // 167
 
-                // Billing
-                case ClientToGameServerMessage.NetMessageGetCatalog:                                                                            // 68
-                case ClientToGameServerMessage.NetMessageGetCurrencyBalance:                                                                    // 69
-                case ClientToGameServerMessage.NetMessageBuyItemFromCatalog:                                                                    // 70
-                case ClientToGameServerMessage.NetMessageBuyGiftForOtherPlayer:                                                                 // 71
-                case ClientToGameServerMessage.NetMessageGetGiftHistory:                                                                        // 73
-                    RouteMessageToService(ServerType.Billing, message);
-                    break;
-
                 default: Logger.Warn($"ReceiveMessage(): Unhandled {(ClientToGameServerMessage)message.Id} [{message.Id}]"); break;
             }
-        }
-
-        private void RouteMessageToService(ServerType serverType, in MailboxMessage mailboxMessage)
-        {
-            GameServiceProtocol.RouteMessage routeMessage = new(_frontendClient, typeof(ClientToGameServerMessage), mailboxMessage);
-            ServerManager.Instance.SendMessageToService(serverType, routeMessage);
         }
 
         private bool OnPlayerSystemMetrics(MailboxMessage message)  // 1
@@ -583,21 +605,7 @@ namespace MHServerEmu.Games.Network
             var isRegionAvailable = message.As<NetMessageIsRegionAvailable>();
             if (isRegionAvailable == null) return Logger.WarnReturn(false, $"OnIsRegionAvailable(): Failed to retrieve message");
 
-            if (_waitingForRegionIsAvailableResponse == false)
-                return Logger.WarnReturn(false, "OnIsRegionAvailable(): Received RegionIsAvailable when we are not waiting for a response");
-
-            if ((PrototypeId)isRegionAvailable.RegionPrototype != TransferParams.DestTargetRegionProtoRef)
-                return Logger.WarnReturn(false, $"OnIsRegionAvailable(): Received RegionIsAvailable does not match our region {TransferParams.DestTargetRegionProtoRef.GetName()}");
-
-            if (isRegionAvailable.IsAvailable == false)
-            {
-                Logger.Warn($"OnIsRegionAvailable(): Region {TransferParams.DestTargetRegionProtoRef.GetName()} is not available, resetting start target");
-                TransferParams.SetTarget(GameDatabase.GlobalsPrototype.DefaultStartTargetFallbackRegion);
-            }
-
-            _waitingForRegionIsAvailableResponse = false;
-            Game.NetworkManager.SetPlayerConnectionPending(this);
-
+            // We don't really need this because we now load players into towns, and client streaming via BitRaider isn't a thing anymore.
             return true;
         }
 
@@ -1169,7 +1177,15 @@ namespace MHServerEmu.Games.Network
             if (avatar.InInteractRange(waypoint, InteractionMethod.Use) == false)
                 return Logger.WarnReturn(false, $"OnUseWaypoint(): Avatar [{avatar}] is not in interact range of waypoint [{waypoint}]");
 
-            MoveToTarget((PrototypeId)useWaypoint.WaypointDataRef, (PrototypeId)useWaypoint.RegionProtoId);
+            PrototypeId waypointProtoRef = (PrototypeId)useWaypoint.WaypointDataRef;
+            PrototypeId regionProtoRefOverride = (PrototypeId)useWaypoint.RegionProtoId;
+            PrototypeId difficultyProtoRef = (PrototypeId)useWaypoint.DifficultyProtoId;
+
+            using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
+            teleporter.Initialize(Player, TeleportContextEnum.TeleportContext_Waypoint);
+            teleporter.TransitionEntity = waypoint;
+            teleporter.TeleportToWaypoint(waypointProtoRef, regionProtoRefOverride, difficultyProtoRef);
+
             return true;
         }
 
@@ -1309,6 +1325,33 @@ namespace MHServerEmu.Games.Network
             return avatar.DoDeathRelease(requestType);
         }
 
+        private bool OnRequestResurrectDecline(in MailboxMessage message)   // 53
+        {
+            var requestResurrectDecline = message.As<NetMessageRequestResurrectDecline>();
+            if (requestResurrectDecline == null) return Logger.WarnReturn(false, $"OnRequestResurrectDecline(): Failed to retrieve message");
+
+            Avatar avatar = Player?.GetActiveAvatarByIndex((int)requestResurrectDecline.AvatarIndex);
+            if (avatar == null) return Logger.WarnReturn(false, "OnRequestResurrectDecline(): avatar == null");
+
+            avatar.ResurrectDecline();
+            return true;
+        }
+
+        private bool OnRequestResurrectAvatar(in MailboxMessage message)   // 54
+        {
+            var requestResurrectAvatar = message.As<NetMessageRequestResurrectAvatar>();
+            if (requestResurrectAvatar == null) return Logger.WarnReturn(false, $"OnRequestResurrectAvatar(): Failed to retrieve message");
+
+            Avatar resurrectorAvatar = Player?.GetActiveAvatarByIndex((int)requestResurrectAvatar.AvatarIndex);
+            if (resurrectorAvatar == null) return Logger.WarnReturn(false, "OnRequestResurrectAvatar(): resurrectorAvatar == null");
+
+            Avatar targetAvatar = Game.EntityManager.GetEntity<Avatar>(requestResurrectAvatar.TargetId);
+            if (targetAvatar == null) return Logger.WarnReturn(false, "OnRequestResurrectAvatar(): targetAvatar == null");
+
+            resurrectorAvatar.ResurrectOtherAvatar(targetAvatar);
+            return true;
+        }
+
         private bool OnReturnToHub(MailboxMessage message)  // 55
         {
             var returnToHub = message.As<NetMessageReturnToHub>();
@@ -1320,15 +1363,15 @@ namespace MHServerEmu.Games.Network
             Region region = avatar.Region;
             if (region == null) return Logger.WarnReturn(false, "OnReturnToHub(): region == null");
 
-            // TODO: Use region.GetBodysliderPowerRef()
+            if (region.Behavior == RegionBehavior.Town && Player.HasBodysliderProperties() == false)
+                return Logger.WarnReturn(false, $"OnReturnToHub(): Player [{Player}] is attempting to bodyslide from town without a saved return location");
 
-            if (region.Prototype.Behavior == RegionBehavior.Town)
-                return Logger.WarnReturn(false, $"OnReturnToHub(): Returning from hubs via bodysliding is not yet implemented");
+            PrototypeId bodysliderPowerRef = region.GetBodysliderPowerRef();
+            if (bodysliderPowerRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "OnReturnToHub(): bodysliderPowerRef == PrototypeId.Invalid");
 
-            PrototypeId bodysliderPowerRef = GameDatabase.GlobalsPrototype.ReturnToHubPower;
             PowerActivationSettings settings = new(avatar.Id, avatar.RegionLocation.Position, avatar.RegionLocation.Position);
-
             avatar.ActivatePower(bodysliderPowerRef, ref settings);
+
             return true;
         }
 
@@ -1414,6 +1457,30 @@ namespace MHServerEmu.Games.Network
 
             Game.ChatManager.HandleChatBanVote(Player, chatBanVote);
             return true;
+        }
+
+        private bool OnGetCatalog(in MailboxMessage message)    // 68
+        {
+            var getCatalog = message.As<NetMessageGetCatalog>();
+            if (getCatalog == null) return Logger.WarnReturn(false, $"OnGetCatalog(): Failed to retrieve message");
+
+            return CatalogManager.Instance.OnGetCatalog(Player, getCatalog);
+        }
+
+        private bool OnGetCurrencyBalance(in MailboxMessage message)    // 69
+        {
+            var getCurrencyBalance = message.As<NetMessageGetCurrencyBalance>();
+            if (getCurrencyBalance == null) return Logger.WarnReturn(false, $"OnGetCurrencyBalance(): Failed to retrieve message");
+
+            return CatalogManager.Instance.OnGetCurrencyBalance(Player);
+        }
+
+        private bool OnBuyItemFromCatalog(in MailboxMessage message)    // 70
+        {
+            var buyItemFromCatalog = message.As<NetMessageBuyItemFromCatalog>();
+            if (buyItemFromCatalog == null) return Logger.WarnReturn(false, $"OnBuyItemFromCatalog(): Failed to retrieve message");
+
+            return CatalogManager.Instance.OnBuyItemFromCatalog(Player, buyItemFromCatalog);
         }
 
         private bool OnPurchaseUnlock(MailboxMessage message)   // 72
@@ -2018,6 +2085,21 @@ namespace MHServerEmu.Games.Network
             return ItemPrototype.DonateItemToPetTech(Player, petTechItem, itemToDonate.ItemSpec, itemToDonate);
         }
 
+        private bool OnSetActivePowerSpec(in MailboxMessage message)    // 147
+        {
+            var setActivePowerSpec = message.As<NetMessageSetActivePowerSpec>();
+            if (setActivePowerSpec == null) return Logger.WarnReturn(false, $"OnSetActivePowerSpec(): Failed to retrieve message");
+
+            Avatar avatar = Game.EntityManager.GetEntity<Avatar>(setActivePowerSpec.AvatarId);
+            if (avatar == null) return Logger.WarnReturn(false, "OnSetActivePowerSpec(): avatar == null");
+
+            Player avatarOwner = avatar.GetOwnerOfType<Player>();
+            if (avatarOwner != Player)
+                return Logger.WarnReturn(false, $"OnSetActivePowerSpec(): Player [{Player}] is attempting to set power spec on avatar [{avatar}] owned by player [{avatarOwner}]");
+
+            return avatar.SetActivePowerSpec((int)setActivePowerSpec.ActiveSpec);
+        }
+
         private bool OnChangeCameraSettings(MailboxMessage message) // 148
         {
             var changeCameraSettings = message.As<NetMessageChangeCameraSettings>();
@@ -2114,7 +2196,8 @@ namespace MHServerEmu.Games.Network
         private bool OnLeaderboardRequest(MailboxMessage message)   // 157
         {
             // Leaderboard details are not cached in games, so route this request to the leaderboard service.
-            RouteMessageToService(ServerType.Leaderboard, message);
+            ServiceMessage.RouteMessage routeMessage = new(_frontendClient, typeof(ClientToGameServerMessage), message);
+            ServerManager.Instance.SendMessageToService(GameServiceType.Leaderboard, routeMessage);
             return true;
         }
 

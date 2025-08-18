@@ -17,15 +17,23 @@ namespace MHServerEmu.Grouping
         private readonly Dictionary<ulong, IFrontendClient> _playerDbIdDict = new();
         private readonly Dictionary<string, IFrontendClient> _playerNameDict = new();    // Store players in a name-client dictionary because tell messages are sent by player name
 
+        public GameServiceState State { get; private set; } = GameServiceState.Created;
+
         public GroupingManagerService()
         {
         }
 
         #region IGameService Implementation
 
-        public void Run() { }
+        public void Run()
+        {
+            State = GameServiceState.Running;
+        }
 
-        public void Shutdown() { }
+        public void Shutdown()
+        {
+            State = GameServiceState.Shutdown;
+        }
 
         public void ReceiveServiceMessage<T>(in T message) where T : struct, IGameServiceMessage
         {
@@ -34,19 +42,19 @@ namespace MHServerEmu.Grouping
                 // NOTE: We haven't really seen this, but there is a ClientToGroupingManager protocol
                 // that includes a single message - GetPlayerInfoByName. If we ever receive it, it should end up here.
 
-                case GameServiceProtocol.AddClient addClient:
+                case ServiceMessage.AddClient addClient:
                     OnAddClient(addClient);
                     break;
 
-                case GameServiceProtocol.RemoveClient removeClient:
+                case ServiceMessage.RemoveClient removeClient:
                     OnRemoveClient(removeClient);
                     break;
 
-                case GameServiceProtocol.GroupingManagerChat chat:
+                case ServiceMessage.GroupingManagerChat chat:
                     OnChat(chat.Client, chat.Chat, chat.PrestigeLevel, chat.PlayerFilter);
                     break;
 
-                case GameServiceProtocol.GroupingManagerTell tell:
+                case ServiceMessage.GroupingManagerTell tell:
                     OnTell(tell.Client, tell.Tell);
                     break;
 
@@ -61,12 +69,12 @@ namespace MHServerEmu.Grouping
             return $"Players: {_playerNameDict.Count}";
         }
 
-        private void OnAddClient(in GameServiceProtocol.AddClient addClient)
+        private void OnAddClient(in ServiceMessage.AddClient addClient)
         {
             AddClient(addClient.Client);
         }
 
-        private void OnRemoveClient(in GameServiceProtocol.RemoveClient removeClient)
+        private void OnRemoveClient(in ServiceMessage.RemoveClient removeClient)
         {
             RemoveClient(removeClient.Client);
         }
