@@ -23,6 +23,7 @@ using MHServerEmu.Games.GameData.Calligraphy;
 using MHServerEmu.Games.GameData.LiveTuning;
 using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Loot;
+using MHServerEmu.Games.Missions;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Populations;
@@ -100,6 +101,10 @@ namespace MHServerEmu.Games.Entities
         protected PowerCollection _powerCollection;
         protected int _unkEvent;
 
+        // Clone data is initialized on demand for ClonePerPlayer world entities (primarily DR reward chests).
+        private Event<PlayerEnteredRegionGameEvent>.Action _playerEnteredRegionAction;
+        private HashSet<ulong> _playersWithClones;
+
         public Event<EntityCollisionEvent> OverlapBeginEvent = new();
         public Event<EntityCollisionEvent> CollideEvent = new();
         public Event<EntityCollisionEvent> OverlapEndEvent = new();
@@ -163,6 +168,8 @@ namespace MHServerEmu.Games.Entities
         public bool IsVacuumable { get => WorldEntityPrototype?.IsVacuumable == true; }
         public bool IsCrafter { get => ((PrototypeId)Properties[PropertyEnum.VendorType]).As<VendorTypePrototype>()?.IsCrafter == true; }
         public bool IsStash { get => Properties[PropertyEnum.OpenPlayerStash]; }
+        public bool IsClonePerPlayer { get => WorldEntityPrototype.ClonePerPlayer; }
+        public bool IsCloneParent { get => IsClonePerPlayer && Properties[PropertyEnum.RestrictedToPlayerGuid] == 0; }
         public Dictionary<ulong, long> TankingContributors { get; private set; }
         public Dictionary<ulong, long> DamageContributors { get; private set; }
         public TagPlayers TagPlayers { get; private set; }
@@ -1071,7 +1078,7 @@ namespace MHServerEmu.Games.Entities
             var entityProto = WorldEntityPrototype;
             if (entityProto == null) return false;
 
-            if (IsCloneParent()) return false;
+            if (IsCloneParent) return false;
 
             var boundsProto = entityProto.Bounds;
             if (boundsProto != null && boundsProto.IgnoreCollisionWithAllies && IsFriendlyTo(other)) return false;
@@ -1119,7 +1126,7 @@ namespace MHServerEmu.Games.Entities
 
         public bool CanInfluenceNavigationMesh()
         {
-            if (IsInWorld == false || TestStatus(EntityStatus.ExitingWorld) || NoCollide || IsIntangible || IsCloneParent())
+            if (IsInWorld == false || TestStatus(EntityStatus.ExitingWorld) || NoCollide || IsIntangible || IsCloneParent)
                 return false;
 
             var prototype = WorldEntityPrototype;
@@ -1639,6 +1646,8 @@ namespace MHServerEmu.Games.Entities
 
         protected virtual void InitializeProcEffectPowers()
         {
+            // NOTE: This should also initialize procs granted by equipment because
+            // equipment proc properties should already be aggregated with the owner.
             if (UpdateProcEffectPowers(Properties, true) == false)
                 Logger.Warn($"InitializeProcEffectPowers(): UpdateProcEffectPowers failed when initializing entity=[{this}]");
         }
@@ -1737,7 +1746,9 @@ namespace MHServerEmu.Games.Entities
 
             Avatar avatar = powerOwner.GetMostResponsiblePowerUser<Avatar>(true);
 
-            // TODO: Set LastInflictedDamageTime for avatars
+            // Set LastInflictedDamageTime for IsCombatActive checks (e.g. when spawning kill loot).
+            if (avatar != null && avatar.IsInWorld)
+                avatar.Properties[PropertyEnum.LastInflictedDamageTime] = Game.CurrentTime;
 
             // Enter combat if this is not an over time effect
             if (powerResults.TestFlag(PowerResultFlags.OverTime) == false)
@@ -1859,6 +1870,9 @@ namespace MHServerEmu.Games.Entities
             {
                 // Agent-only: interrupt on cancel on damaged powers
                 OnDamaged(powerResults);
+
+                if (powerOwner != null && powerOwner.CanBePlayerOwned())
+                    AwardHitLoot(healthDelta, powerResults.TestFlag(PowerResultFlags.OverTime));
 
                 TryActivateOnGotDamagedProcs(ProcTriggerType.OnGotDamaged, powerResults, healthDelta);
                 TryActivateOnGotDamagedProcs(ProcTriggerType.OnGotDamagedForPctHealth, powerResults, healthDelta);
@@ -3176,6 +3190,42 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
+        private bool CloneForPlayer(ulong playerDbId)
+        {
+            if (IsInWorld == false) return Logger.WarnReturn(false, "CloneForPlayer(): IsInWorld == false");
+            if (IsClonePerPlayer == false) return Logger.WarnReturn(false, "CloneForPlayer(): IsClonePerPlayer == false");
+
+            if (playerDbId == 0) return Logger.WarnReturn(false, "CloneForPlayer(): playerDbId == 0");
+
+            if (_playersWithClones != null && _playersWithClones.Contains(playerDbId))
+                return false;
+
+            using PropertyCollection properties = ObjectPoolManager.Instance.Get<PropertyCollection>();
+            properties.FlattenCopyFrom(Properties, false);
+            properties[PropertyEnum.RestrictedToPlayerGuid] = playerDbId;
+
+            using EntitySettings settings = ObjectPoolManager.Instance.Get<EntitySettings>();
+            settings.EntityRef = PrototypeDataRef;
+            settings.RegionId = RegionLocation.RegionId;
+            settings.Position = RegionLocation.Position;
+            settings.Orientation = RegionLocation.Orientation;
+            settings.Properties = properties;
+
+            if (Game.EntityManager.CreateEntity(settings) == null)
+                return Logger.WarnReturn(false, $"CloneForPlayer(): Failed to clone [{this}] for player 0x{playerDbId:X}");
+
+            // Keep track of created clones to avoid spawning multiple ones for players who revisit the region.
+            _playersWithClones ??= new();
+            _playersWithClones.Add(playerDbId);
+
+            return true;
+        }
+
+        private void OnPlayerEnteredRegion(in PlayerEnteredRegionGameEvent evt)
+        {
+            CloneForPlayer(evt.Player.DatabaseUniqueId);
+        }
+
         #endregion
 
         #region Event Handlers
@@ -3226,6 +3276,17 @@ namespace MHServerEmu.Games.Entities
             if (WorldEntityPrototype.DiscoverInRegion)
                 region.DiscoverEntity(this, false);
 
+            if (IsCloneParent)
+            {
+                // Create clones for all players currently in the region.
+                foreach (Player player in new PlayerIterator(region))
+                    CloneForPlayer(player.DatabaseUniqueId);
+
+                // Add an event to create additional clones for players who will come later.
+                _playerEnteredRegionAction ??= OnPlayerEnteredRegion;
+                region.PlayerEnteredRegionEvent.AddActionBack(_playerEnteredRegionAction);
+            }
+
             if (Bounds.CollisionType != BoundsCollisionType.None)
                 RegisterForPendingPhysicsResolve();
 
@@ -3256,6 +3317,10 @@ namespace MHServerEmu.Games.Entities
                 // Undiscover from region
                 if (WorldEntityPrototype.DiscoverInRegion)
                     region.UndiscoverEntity(this, true);
+
+                // Stop cloning
+                if (IsCloneParent)
+                    region.PlayerEnteredRegionEvent.RemoveAction(_playerEnteredRegionAction);
             }
 
             // Undiscover from players
@@ -3723,14 +3788,19 @@ namespace MHServerEmu.Games.Entities
             if (IsInWorld == false)
                 return false;
 
+            bool requireCombatActive = WorldEntityPrototype.RequireCombatActiveForKillCredit;
+
             List<Player> playerList = ListPool<Player>.Instance.Get();
             // NOTE: Compute nearby players on demand for performance reasons
 
             // Loot Tables
             if (killFlags.HasFlag(KillFlags.NoLoot) == false && Properties[PropertyEnum.NoLootDrop] == false)
             {
-                Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, true, playerList);
-                // TODO: Manually add faraway mission participants if needed
+                Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, requireCombatActive, playerList);
+
+                // Add faraway mission participants if needed
+                if (this is Agent agent)
+                    Mission.AddContributorsForLootSpawn(agent, playerList);
 
                 // OnKilled loot table is different based on the rank of this entity
                 RankPrototype rankProto = GetRankPrototype();
@@ -3749,7 +3819,7 @@ namespace MHServerEmu.Games.Entities
             {
                 // Compute player count if we haven't done so already for loot tables
                 if (playerList.Count == 0)
-                    Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, true, playerList);
+                    Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, requireCombatActive, playerList);
 
                 AwardKillXP(playerList);
             }
@@ -3758,16 +3828,48 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
+        private void AwardHitLoot(float healthDelta, bool isOverTime)
+        {
+            bool requireCombatActive = WorldEntityPrototype.RequireCombatActiveForKillCredit;
+
+            List<Player> playerList = ListPool<Player>.Instance.Get();
+            Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, requireCombatActive, playerList);
+            if (playerList.Count > 0)
+            {
+                // NOTE: Only OnDamagedForPctHealth is used in 1.52, and only for Doop credit drops,
+                // so the vast majority of time this function is not going to do anything.
+                if (isOverTime == false)
+                    AwardLootForDropEvent(LootDropEventType.OnHealthBelowPctHit, playerList);
+
+                AwardLootForDropEvent(LootDropEventType.OnHealthBelowPct, playerList);
+                AwardLootForDropEvent(LootDropEventType.OnHit, playerList);
+                AwardLootForDropEvent(LootDropEventType.OnDamagedForPctHealth, playerList, healthDelta);
+            }
+
+            ListPool<Player>.Instance.Return(playerList);
+        }
+
         private bool AwardInteractionLoot(ulong interactorEntityId)
         {
-            // TODO: Per-player clones for chests, use interactorEntity for this
             WorldEntity interactorEntity = Game.EntityManager.GetEntity<WorldEntity>(interactorEntityId);
             if (interactorEntity == null) return Logger.WarnReturn(false, "AwardInteractionLoot(): interactorEntity == null");
 
             // NOTE: Bowling ball dispenser is not per-player cloned, so interacting
             // with it will give a ball to all players nearby. This doesn't seem right.
             List<Player> playerList = ListPool<Player>.Instance.Get();
-            Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, false, playerList);
+
+            if (IsClonePerPlayer)
+            {
+                // If this is a clone-per-player entity, award loot only to the owner of the interacting entity.
+                Player player = interactorEntity.GetOwnerOfType<Player>();
+                if (player != null)
+                    playerList.Add(player);
+            }
+            else
+            {
+                // For regular entities award loot to all nearby players.
+                Power.ComputeNearbyPlayers(Region, RegionLocation.Position, 0, false, playerList);
+            }
 
             AwardLootForDropEvent(LootDropEventType.OnInteractedWith, playerList);
 
@@ -3775,7 +3877,7 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
-        private bool AwardLootForDropEvent(LootDropEventType eventType, List<Player> playerList)
+        private bool AwardLootForDropEvent(LootDropEventType eventType, List<Player> playerList, float healthDelta = 0f)
         {
             const int MaxTables = 8;    // The maximum we've seen in 1.52 prototypes is 4, double this just in case
 
@@ -3783,7 +3885,9 @@ namespace MHServerEmu.Games.Entities
             if (playerList.Count == 0)
                 return true;
 
+            // TODO: Change Span to a pooled list?
             Span<(PrototypeId, LootActionType)> tables = stackalloc (PrototypeId, LootActionType)[MaxTables];
+            List<PropertyId> tablesToRemove = ListPool<PropertyId>.Instance.Get();
             int numTables = 0;
 
             foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.LootTablePrototype, (int)eventType))
@@ -3792,6 +3896,41 @@ namespace MHServerEmu.Games.Entities
                 {
                     Logger.Warn($"AwardLootForDropEvent(): Exceeded the maximum number of loot tables in {this}");
                     break;
+                }
+
+                switch (eventType)
+                {
+                    case LootDropEventType.OnHealthBelowPctHit:
+                    case LootDropEventType.OnHealthBelowPct:
+                    {
+                        Property.FromParam(kvp.Key, 1, out int threshold);
+
+                        float healthPct = MathHelper.Ratio((long)Properties[PropertyEnum.Health], (long)Properties[PropertyEnum.HealthMax]) * 100f;
+                        if (healthPct > threshold)
+                            continue;
+                        
+                        // Remove this table after this drop
+                        tablesToRemove.Add(kvp.Key);
+                        break;
+                    }
+
+                    case LootDropEventType.OnDamagedForPctHealth:
+                    {
+                        if (healthDelta >= 0f)
+                            continue;
+
+                        Property.FromParam(kvp.Key, 1, out int threshold);
+
+                        long healthMax = Properties[PropertyEnum.HealthMax];
+                        if (healthMax == 0) // potential div by 0
+                            continue;
+
+                        float pctDamaged = -healthDelta / healthMax * 100f;
+                        if (pctDamaged < threshold)
+                            continue;
+
+                        break;
+                    }
                 }
 
                 Property.FromParam(kvp.Key, 2, out int actionTypeInt);
@@ -3807,18 +3946,25 @@ namespace MHServerEmu.Games.Entities
                 tables[numTables++] = (lootTableProtoRef, actionType);
             }
 
-            tables = tables[..numTables];
-
-            // Roll and distribute the rewards
-            int recipientId = 1;
-            foreach (Player player in playerList)
+            if (numTables > 0)
             {
-                using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
-                inputSettings.Initialize(LootContext.Drop, player, this);
-                inputSettings.EventType = eventType;
-                Game.LootManager.AwardLootFromTables(tables, inputSettings, recipientId++);
+                tables = tables[..numTables];
+
+                // Roll and distribute the rewards
+                int recipientId = 1;
+                foreach (Player player in playerList)
+                {
+                    using LootInputSettings inputSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                    inputSettings.Initialize(LootContext.Drop, player, this);
+                    inputSettings.EventType = eventType;
+                    Game.LootManager.AwardLootFromTables(tables, inputSettings, recipientId++);
+                }
+
+                foreach (PropertyId tableProp in tablesToRemove)
+                    Properties.RemoveProperty(tableProp);
             }
 
+            ListPool<PropertyId>.Instance.Return(tablesToRemove);
             return true;
         }
 
@@ -3969,11 +4115,6 @@ namespace MHServerEmu.Games.Entities
             return false;
         }
 
-        public bool IsCloneParent()
-        {
-            return WorldEntityPrototype.ClonePerPlayer && Properties[PropertyEnum.RestrictedToPlayerGuid] == 0;
-        }
-
         public override bool ApplyState(PrototypeId stateRef)
         {
             if (base.ApplyState(stateRef) == false) return false;
@@ -4056,7 +4197,12 @@ namespace MHServerEmu.Games.Entities
             {
                 // Apply mods from boosts and rank
 
-                foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.EnemyBoost).ToArray())
+                Dictionary<PropertyId, PropertyValue> enemyBoosts = DictionaryPool<PropertyId, PropertyValue>.Instance.Get();
+
+                foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.EnemyBoost))
+                    enemyBoosts.Add(kvp.Key, kvp.Value);
+
+                foreach (var kvp in enemyBoosts)
                 {
                     Property.FromParam(kvp.Key, 0, out PrototypeId modProtoRef);
                     if (modProtoRef == PrototypeId.Invalid)
@@ -4067,6 +4213,8 @@ namespace MHServerEmu.Games.Entities
 
                     ModChangeModEffects(modProtoRef, kvp.Value);
                 }
+
+                DictionaryPool<PropertyId, PropertyValue>.Instance.Return(enemyBoosts);
 
                 if (Properties.HasProperty(PropertyEnum.Rank))
                 {

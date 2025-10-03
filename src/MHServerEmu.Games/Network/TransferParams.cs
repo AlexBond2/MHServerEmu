@@ -23,7 +23,7 @@ namespace MHServerEmu.Games.Network
 
         public NetStructRegionLocation DestLocation { get; private set; }
         public NetStructRegionTarget DestTarget { get; private set; }
-        public ulong DestEntityDbId { get; set; }     // TODO: Teleport directly to another player
+        public ulong DestEntityDbId { get; set; }
 
         // TODO
         // int32 DestTeamIndex
@@ -115,8 +115,20 @@ namespace MHServerEmu.Games.Network
             if (DestEntityDbId == 0)
                 return false;
 
-            // TODO: Teleport to another player by DbId
-            return Logger.WarnReturn(false, "FindStartLocation(): Teleport by EntityDbId is not yet implemented");
+            Entity entity = PlayerConnection?.Game.EntityManager.GetEntityByDbGuid<Entity>(DestEntityDbId);
+            if (entity == null)
+                return false;
+
+            WorldEntity worldEntity = entity is Player player ? player.CurrentAvatar : entity as WorldEntity;
+            if (worldEntity == null)
+                return false;
+
+            Vector3 entityPosition = worldEntity.ExitWorldRegionLocation.Position;
+            if (Avatar.AdjustStartPositionIfNeeded(region, ref entityPosition) == false)
+                return false;
+
+            position = entityPosition;
+            return true;
         }
 
         private bool FindStartLocationFromSpecificLocation(Region region, ref Vector3 position, ref Orientation orientation)
@@ -164,7 +176,7 @@ namespace MHServerEmu.Games.Network
                 return false;
 
             DestTarget = NetStructRegionTarget.CreateBuilder()
-                .SetRegionProtoId(DestTarget.RegionProtoId)     // Keep this within the same region, we are just falling back to a different position.
+                .SetRegionProtoId((ulong)region.PrototypeDataRef)     // Keep this within the same region, we are just falling back to a different position.
                 .SetAreaProtoId((ulong)targetProto.Area)
                 .SetCellProtoId((ulong)GameDatabase.GetDataRefByAsset(targetProto.Cell))
                 .SetEntityProtoId((ulong)targetProto.Entity)

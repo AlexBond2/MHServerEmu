@@ -683,30 +683,6 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
-        protected override void InitializeProcEffectPowers()
-        {
-            base.InitializeProcEffectPowers();
-
-            // Initialize equipment procs
-            EntityManager entityManager = Game.EntityManager;
-
-            foreach (Inventory inventory in new InventoryIterator(this, InventoryIterationFlags.Equipment))
-            {
-                foreach (var entry in inventory)
-                {
-                    Item item = entityManager.GetEntity<Item>(entry.Id);
-                    if (item == null)
-                    {
-                        Logger.Warn("InitializeProcEffectPowers(): item == null");
-                        continue;
-                    }
-
-                    if (UpdateProcEffectPowers(item.Properties, true) == false)
-                        Logger.Warn($"InitializeProcEffectPowers(): UpdateProcEffectPowers failed when initializing item=[{item}] owner=[{this}]");
-                }
-            }
-        }
-
         protected override PowerUseResult ActivatePower(Power power, ref PowerActivationSettings settings)
         {
             PowerUseResult result = base.ActivatePower(power, ref settings);
@@ -2886,14 +2862,15 @@ namespace MHServerEmu.Games.Entities
         {
             if (Properties[PropertyEnum.AIMasterAvatarDbGuid] != avatar.DatabaseUniqueId) return;
 
-            SetDormant(false);
-
             Properties[PropertyEnum.NoLootDrop] = true;
             Properties[PropertyEnum.NoExpOnDeath] = true;
             Properties[PropertyEnum.AIIgnoreNoTgtOverrideProfile] = true;
             Properties[PropertyEnum.DramaticEntrancePlayedOnce] = true;
             Properties[PropertyEnum.PetHealthPctBonus] = avatar.Properties[PropertyEnum.HealthPctBonus];
             Properties[PropertyEnum.PetDamagePctBonus] = avatar.Properties[PropertyEnum.DamagePctBonus];
+
+            // IMPORTANT: Dormant needs to be turned off after setting DramaticEntrancePlayedOnce.
+            SetDormant(false);
 
             AIController?.Blackboard.PropertyCollection.RemoveProperty(PropertyEnum.AIFullOverride);
             Properties.RemoveProperty(PropertyEnum.MissionPrototype);

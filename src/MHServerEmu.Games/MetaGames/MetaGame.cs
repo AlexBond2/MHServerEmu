@@ -30,7 +30,7 @@ namespace MHServerEmu.Games.MetaGames
         public static readonly Logger Logger = LogManager.CreateLogger();
         public static bool Debug = false;
 
-        protected RepString _name;
+        protected RepVar_string _name;
         protected ulong _regionId;
 
         public Region Region { get => GetRegion(); }
@@ -41,7 +41,7 @@ namespace MHServerEmu.Games.MetaGames
         public GRandom Random { get; }
         public MetaGameMode CurrentMode => (_modeIndex > -1 && _modeIndex < GameModes.Count) ? GameModes[_modeIndex] : null;
 
-        public IEnumerable<Player> Players { get => new PlayerIterator(GetRegion()); }
+        public PlayerIterator Players { get => new PlayerIterator(GetRegion()); }
         public UIDataProvider UIDataProvider { get => GetRegion()?.UIDataProvider; }
 
         private readonly HashSet<ulong> _discoveredEntities = new();

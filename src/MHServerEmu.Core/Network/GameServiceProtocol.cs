@@ -220,6 +220,161 @@ namespace MHServerEmu.Core.Network
             public readonly ulong PlayerDbId = playerDbId;
         }
 
+        /// <summary>
+        /// [Game -> PlayerManager] Updates the difficulty tier preference of a player on the Player Manager.
+        /// </summary>
+        public readonly struct SetDifficultyTierPreference(ulong playerDbId, ulong difficultyTierProtoId)
+            : IGameServiceMessage
+        {
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly ulong DifficultyTierProtoId = difficultyTierProtoId;
+        }
+
+        /// <summary>
+        /// [Game -> PlayerManager] Requests player dbid and properly cased name from the player manager.
+        /// </summary>
+        public readonly struct PlayerLookupByNameRequest(ulong gameId, ulong playerDbId, ulong remoteJobId, string requestPlayerName)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly ulong RemoteJobId = remoteJobId;
+            public readonly string RequestPlayerName = requestPlayerName;
+        }
+
+        /// <summary>
+        /// [PlayerManager -> Game] Response for PlayerLookupByNameRequest.
+        /// </summary>
+        public readonly struct PlayerLookupByNameResult(ulong gameId, ulong playerDbId, ulong remoteJobId, ulong resultPlayerDbId, string resultPlayerName)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly ulong RemoteJobId = remoteJobId;
+            public readonly ulong ResultPlayerDbId = resultPlayerDbId;
+            public readonly string ResultPlayerName = resultPlayerName;
+        }
+
+        public readonly struct PlayerNameChanged(ulong playerDbId, string oldPlayerName, string newPlayerName)
+            : IGameServiceMessage
+        {
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly string OldPlayerName = oldPlayerName;
+            public readonly string NewPlayerName = newPlayerName;
+        }
+
+        /// <summary>
+        /// [Game -> PlayerManager] Updates community status for a player.
+        /// </summary>
+        public readonly struct CommunityStatusUpdate(CommunityMemberBroadcast broadcast)
+            : IGameServiceMessage
+        {
+            public readonly CommunityMemberBroadcast Broadcast = broadcast;
+        }
+
+        /// <summary>
+        /// [Game -> PlayerManager] Requests community status for the specified players from the player manager.
+        /// </summary>
+        public readonly struct CommunityStatusRequest(ulong gameId, ulong playerDbId, List<ulong> members)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly List<ulong> Members = members;
+        }
+
+        /// <summary>
+        /// [PlayerManager -> Game] A batch of <see cref="CommunityMemberBroadcast"/> instances to be delivered to all players on the server.
+        /// </summary>
+        public readonly struct CommunityBroadcastBatch : IGameServiceMessage
+        {
+            // This combines both CommunitiesReceiveBroadcastBatch and CommunityBroadcastResults from PlayerMgrToGameServer.proto.
+
+            private readonly CommunityMemberBroadcast Instance;     // Optimization to avoid allocating lists for individual broadcasts
+            private readonly List<CommunityMemberBroadcast> List;
+
+            public readonly ulong GameId;
+            public readonly ulong PlayerDbId;
+            // We don't actually need a broadcast id with out implementation
+
+            public CommunityMemberBroadcast this[int index] { get => Instance != null ? Instance : List[index]; }
+            public int Count { get => Instance != null ? 1 : List.Count; }
+
+            public CommunityBroadcastBatch(CommunityMemberBroadcast broadcast, ulong gameId = 0, ulong playerDbId = 0)
+            {
+                Instance = broadcast;
+                List = null;
+
+                GameId = gameId;
+                PlayerDbId = playerDbId;
+            }
+
+            public CommunityBroadcastBatch(List<CommunityMemberBroadcast> broadcasts, ulong gameId = 0, ulong playerDbId = 0)
+            {
+                Instance = null;
+                List = broadcasts;
+
+                GameId = gameId;
+                PlayerDbId = playerDbId;
+            }
+        }
+
+        /// <summary>
+        /// [Game -> PlayerManager] Forwards a party operation request received from a client to the player manager.
+        /// </summary>
+        public readonly struct PartyOperationRequest(PartyOperationPayload request)
+            : IGameServiceMessage
+        {
+            public readonly PartyOperationPayload Request = request;
+        }
+
+        public readonly struct PartyBoostUpdate(ulong playerDbId, List<ulong> boosts)
+            : IGameServiceMessage
+        {
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly List<ulong> Boosts = boosts;
+        }
+
+        // NOTE: PlayerManager -> Game party messages are based on 1.53.
+
+        /// <summary>
+        /// [PlayerManager -> Game] Contains a response to a forwarded party operation request.
+        /// </summary>
+        public readonly struct PartyOperationRequestServerResult(ulong gameId, ulong playerDbId, PartyOperationPayload request, GroupingOperationResult result)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly PartyOperationPayload Request = request;
+            public readonly GroupingOperationResult Result = result;
+        }
+
+        /// <summary>
+        /// [PlayerManager -> Game] Updates the state of a party in a game instance.
+        /// </summary>
+        public readonly struct PartyInfoServerUpdate(ulong gameId, ulong playerDbId, ulong groupId, PartyInfo partyInfo)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly ulong GroupId = groupId;
+            public readonly PartyInfo PartyInfo = partyInfo;
+        }
+
+        /// <summary>
+        /// [PlayerManager -> Game] Update the state of a party member in a party in a game instance.
+        /// </summary>
+        public readonly struct PartyMemberInfoServerUpdate(ulong gameId, ulong playerDbId, ulong groupId, ulong memberDbId, PartyMemberEvent memberEvent, PartyMemberInfo memberInfo)
+            : IGameServiceMessage
+        {
+            public readonly ulong GameId = gameId;
+            public readonly ulong PlayerDbId = playerDbId;
+            public readonly ulong GroupId = groupId;
+            public readonly ulong MemberDbId = memberDbId;
+            public readonly PartyMemberEvent MemberEvent = memberEvent;
+            public readonly PartyMemberInfo MemberInfo = memberInfo;
+        }
+
         #endregion
 
         #region Grouping Manager
@@ -233,11 +388,18 @@ namespace MHServerEmu.Core.Network
             public readonly List<ulong> PlayerFilter = playerFilter;
         }
 
-        public readonly struct GroupingManagerTell(IFrontendClient client, NetMessageTell tell)
+        public readonly struct GroupingManagerTell(IFrontendClient client, NetMessageTell tell, int prestigeLevel)
             : IGameServiceMessage
         {
             public readonly IFrontendClient Client = client;
             public readonly NetMessageTell Tell = tell;
+            public readonly int PrestigeLevel = prestigeLevel;
+        }
+
+        public readonly struct GroupingManagerServerNotification(string notificationText)
+            : IGameServiceMessage
+        {
+            public readonly string NotificationText = notificationText;
         }
 
         #endregion

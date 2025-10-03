@@ -45,6 +45,8 @@ namespace MHServerEmu.Games.Network.InstanceManagement
 
         public void ReceiveServiceMessage<T>(in T message) where T : struct, IGameServiceMessage
         {
+            // TODO?: Add common interface for routable messages if we switch to class-based service messages.
+
             switch (message)
             {
                 case ServiceMessage.RouteMessageBuffer routeMessageBuffer:
@@ -81,6 +83,29 @@ namespace MHServerEmu.Games.Network.InstanceManagement
 
                 case ServiceMessage.WorldViewSync worldViewUpdate:
                     RouteMessageToGame(worldViewUpdate.GameId, worldViewUpdate);
+                    break;
+
+                case ServiceMessage.PlayerLookupByNameResult playerLookupByNameResult:
+                    RouteMessageToGame(playerLookupByNameResult.GameId, playerLookupByNameResult);
+                    break;
+
+                case ServiceMessage.CommunityBroadcastBatch communityBroadcastBatch:
+                    if (communityBroadcastBatch.GameId != 0)
+                        RouteMessageToGame(communityBroadcastBatch.GameId, communityBroadcastBatch);
+                    else
+                        GameManager.BroadcastServiceMessageToGames(communityBroadcastBatch);
+                    break;
+
+                case ServiceMessage.PartyOperationRequestServerResult partyOperationRequestServerResult:
+                    RouteMessageToGame(partyOperationRequestServerResult.GameId, partyOperationRequestServerResult);
+                    break;
+
+                case ServiceMessage.PartyInfoServerUpdate partyInfoServerUpdate:
+                    RouteMessageToGame(partyInfoServerUpdate.GameId, partyInfoServerUpdate);
+                    break;
+
+                case ServiceMessage.PartyMemberInfoServerUpdate partyMemberInfoServerUpdate:
+                    RouteMessageToGame(partyMemberInfoServerUpdate.GameId, partyMemberInfoServerUpdate);
                     break;
 
                 case ServiceMessage.LeaderboardStateChange leaderboardStateChange:
