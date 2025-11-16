@@ -31,10 +31,13 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="Data\Billing\Catalog.json">
+    <None Update="Data\Game\LiveTuning\LiveTuningDataPvP.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Data\Billing\CatalogPatch.json">
+    <None Update="Data\Game\MTXStore\Catalog.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Data\Game\MTXStore\CatalogLimitedCostumes.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Data\Game\Achievements\AchievementContextMap.json">
@@ -55,6 +58,9 @@
     <None Update="Data\Game\Achievements\eng.achievements.string">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Update="Data\Game\MTXStore\CatalogRestoredHeroes.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="Data\Game\Patches\Off\PatchDataCarnival.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
@@ -70,11 +76,11 @@
     <None Update="Data\Game\Patches\PatchDataBugFixes.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Data\Game\LiveTuningData.json">
+    <None Update="Data\Game\LiveTuning\LiveTuningData.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Update="Data\Game\LiveTuningDataBugFixes.json">
-      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    <None Update="Data\Game\LiveTuning\LiveTuningDataBugFixes.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
     <None Update="Data\Game\Patches\PatchDataRestoredContent.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

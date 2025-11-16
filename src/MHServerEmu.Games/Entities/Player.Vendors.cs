@@ -179,7 +179,12 @@ namespace MHServerEmu.Games.Entities
                 if (IsInGame == false)
                     settings.OptionFlags &= ~EntitySettingsOptionFlags.EnterGame;
 
-                item = entityManager.CreateEntity(settings) as Item;
+                Item clonedItem = entityManager.CreateEntity(settings) as Item;
+
+                if (clonedItem == null)
+                    return Logger.WarnReturn(false, $"BuyItemFromVendor(): Failed to clone item [{item}]");
+
+                item = clonedItem;
             }
 
             // Pay the cost of the item. We need to do this before we move the item because
@@ -339,6 +344,16 @@ namespace MHServerEmu.Games.Entities
 
             PrototypeId vendorTypeProtoRef = vendor.Properties[PropertyEnum.VendorType];
             if (vendorTypeProtoRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "RefreshVendorInventory(): vendorTypeProtoRef == PrototypeId.Invalid");
+
+            return RefreshVendorInventoryInternal(vendorTypeProtoRef);
+        }
+
+        public bool RefreshVendorInventory(PrototypeId vendorTypeProtoRef)
+        {
+            if (vendorTypeProtoRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "RefreshVendorInventory(): vendorTypeProtoRef == PrototypeId.Invalid");
+
+            if (CanRefreshVendorInventory(vendorTypeProtoRef, false) != VendorResult.RefreshSuccess)
+                return false;
 
             return RefreshVendorInventoryInternal(vendorTypeProtoRef);
         }
@@ -759,10 +774,12 @@ namespace MHServerEmu.Games.Entities
                     rollSettings.UsableAvatar = ((PrototypeId)Properties[PropertyEnum.VendorRollAvatar, vendorTypeProtoRef]).As<AvatarPrototype>();
                     rollSettings.Level = Properties[PropertyEnum.VendorRollLevel, vendorTypeProtoRef];
 
-                    // TODO: region keywords
                     Region region = GetRegion();
                     if (region != null)
+                    {
                         rollSettings.RegionScenarioRarity = region.Settings.ItemRarity;
+                        rollSettings.RegionKeywords = region.GetKeywordsMask();
+                    }
 
                     // Initialize resolver and roll
                     using ItemResolver resolver = ObjectPoolManager.Instance.Get<ItemResolver>();

@@ -487,6 +487,18 @@ namespace MHServerEmu.Games.Entities.Avatars
             Player owner = GetOwnerOfType<Player>();
             if (owner == null) return Logger.WarnReturn(false, "DoDeathRelease(): owner == null");
 
+            if (region.MetaGames.Count > 0) 
+            {
+                var player = GetOwnerOfType<Player>();
+                var manager = Game.EntityManager;
+                foreach (var metagame in region.MetaGames)
+                {
+                    var pvp = manager.GetEntity<PvP>(metagame);
+                    if (pvp == null) continue;
+                    if (pvp.OnResurrect(player)) return true;
+                }
+            }
+
             switch (requestType)
             {
                 case DeathReleaseRequestType.Checkpoint:
@@ -512,8 +524,6 @@ namespace MHServerEmu.Games.Entities.Avatars
 
                         using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
                         teleporter.Initialize(player, TeleportContextEnum.TeleportContext_Resurrect);
-                        // Ignore player/party difficulty preference and resurrect in the current difficulty for consistency.
-                        teleporter.DifficultyTierRef = region.DifficultyTierRef;
                         return teleporter.TeleportToTarget(regionProtoRef, areaProtoRef, cellProtoRef, entityProtoRef);
                     }
                     else 
@@ -5907,12 +5917,12 @@ namespace MHServerEmu.Games.Entities.Avatars
                     using LootInputSettings settings = ObjectPoolManager.Instance.Get<LootInputSettings>();
                     settings.Initialize(LootContext.Initialization, player, null, 1);
 
-                    Span<(PrototypeId, LootActionType)> tables = stackalloc (PrototypeId, LootActionType)[]
-                    {
-                        (prestigeLootTableProtoRef, LootActionType.Give)
-                    };
+                    List<(PrototypeId, LootActionType)> tables = ListPool<(PrototypeId, LootActionType)>.Instance.Get();
+                    tables.Add((prestigeLootTableProtoRef, LootActionType.Give));
 
                     Game.LootManager.AwardLootFromTables(tables, settings, 1);
+
+                    ListPool<(PrototypeId, LootActionType)>.Instance.Return(tables);
                 }
             }
             else

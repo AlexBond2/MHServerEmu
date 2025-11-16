@@ -131,7 +131,7 @@ namespace MHServerEmu.Games.Network
             // Set G balance for new accounts if needed
             if (_dbAccount.Player.GazillioniteBalance == -1)
             {
-                long defaultBalance = ConfigManager.Instance.GetConfig<BillingConfig>().GazillioniteBalanceForNewAccounts;
+                long defaultBalance = ConfigManager.Instance.GetConfig<MTXStoreConfig>().GazillioniteBalanceForNewAccounts;
                 Logger.Trace($"LoadFromDBAccount(): Setting Gazillionite balance for account [{_dbAccount}] to the default value for new accounts ({defaultBalance})", LogCategory.MTXStore);
                 _dbAccount.Player.GazillioniteBalance = defaultBalance;
             }
@@ -413,6 +413,10 @@ namespace MHServerEmu.Games.Network
                 return;
             }
 
+            // REMOVEME: Temp team selection logic until we have proper matchmaking.
+            if (region.ContainsPvPMatch())
+                TransferParams.DestTeamIndex = region.GetTeamIndex();
+
             if (TransferParams.FindStartLocation(out Vector3 startPosition, out Orientation startOrientation) == false)
             {
                 Logger.Error($"EnterGame(): Failed to find start location");
@@ -505,6 +509,7 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageGetCatalog:                        OnGetCatalog(message); break;                       // 68
                 case ClientToGameServerMessage.NetMessageGetCurrencyBalance:                OnGetCurrencyBalance(message); break;               // 69
                 case ClientToGameServerMessage.NetMessageBuyItemFromCatalog:                OnBuyItemFromCatalog(message); break;               // 70
+                case ClientToGameServerMessage.NetMessageBuyGiftForOtherPlayer:             OnBuyGiftForOtherPlayer(message); break;            // 71
                 case ClientToGameServerMessage.NetMessagePurchaseUnlock:                    OnPurchaseUnlock(message); break;                   // 72
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieStarted:      OnNotifyFullscreenMovieStarted(message); break;     // 84
                 case ClientToGameServerMessage.NetMessageNotifyFullscreenMovieFinished:     OnNotifyFullscreenMovieFinished(message); break;    // 85
@@ -527,6 +532,7 @@ namespace MHServerEmu.Games.Network
                 case ClientToGameServerMessage.NetMessageTeleportToPartyMember:             OnTeleportToPartyMember(message); break;            // 114
                 case ClientToGameServerMessage.NetMessageSelectAvatarSynergies:             OnSelectAvatarSynergies(message); break;            // 116
                 case ClientToGameServerMessage.NetMessageRequestLegendaryMissionReroll:     OnRequestLegendaryMissionReroll(message); break;    // 117
+                case ClientToGameServerMessage.NetMessageRequestPlayerOwnsItemStatus:       OnRequestPlayerOwnsItemStatus(message); break;      // 120
                 case ClientToGameServerMessage.NetMessageRequestInterestInInventory:        OnRequestInterestInInventory(message); break;       // 121
                 case ClientToGameServerMessage.NetMessageRequestInterestInAvatarEquipment:  OnRequestInterestInAvatarEquipment(message); break; // 123
                 case ClientToGameServerMessage.NetMessageRequestInterestInTeamUpEquipment:  OnRequestInterestInTeamUpEquipment(message); break; // 124
@@ -1499,6 +1505,14 @@ namespace MHServerEmu.Games.Network
             return CatalogManager.Instance.OnBuyItemFromCatalog(Player, buyItemFromCatalog);
         }
 
+        private bool OnBuyGiftForOtherPlayer(in MailboxMessage message) // 71
+        {
+            var buyGiftForOtherPlayer = message.As<NetMessageBuyGiftForOtherPlayer>();
+            if (buyGiftForOtherPlayer == null) return Logger.WarnReturn(false, $"OnBuyGiftForOtherPlayer(): Failed to retrieve message");
+
+            return CatalogManager.Instance.OnBuyGiftForOtherPlayer(Player, buyGiftForOtherPlayer);
+        }
+
         private bool OnPurchaseUnlock(MailboxMessage message)   // 72
         {
             var purchaseUnlock = message.As<NetMessagePurchaseUnlock>();
@@ -1821,6 +1835,22 @@ namespace MHServerEmu.Games.Network
             var requestLegendaryMissionRerol = message.As<NetMessageRequestLegendaryMissionReroll>();
             if (requestLegendaryMissionRerol == null) return Logger.WarnReturn(false, $"OnRequestLegendaryMissionReroll(): Failed to retrieve message");
             Player.RequestLegendaryMissionReroll();
+            return true;
+        }
+
+        private bool OnRequestPlayerOwnsItemStatus(in MailboxMessage message)   // 120
+        {
+            var requestPlayerOwnsItemStatus = message.As<NetMessageRequestPlayerOwnsItemStatus>();
+            if (requestPlayerOwnsItemStatus == null) return Logger.WarnReturn(false, "OnRequestPlayerOwnsItemStatus(): Failed to retrieve message");
+
+            PrototypeId itemProtoRef = (PrototypeId)requestPlayerOwnsItemStatus.ItemProtoId;
+            bool ownsItem = Player.OwnsItem((PrototypeId)requestPlayerOwnsItemStatus.ItemProtoId);
+
+            Player.SendMessage(NetMessagePlayerOwnsItemResponse.CreateBuilder()
+                .SetItemProtoId((ulong)itemProtoRef)
+                .SetOwns(ownsItem)
+                .Build());
+
             return true;
         }
 

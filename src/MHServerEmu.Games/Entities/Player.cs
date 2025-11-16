@@ -3,6 +3,7 @@ using Gazillion;
 using Google.ProtocolBuffers;
 using MHServerEmu.Core.Collections;
 using MHServerEmu.Core.Collisions;
+using MHServerEmu.Core.Config;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
@@ -30,6 +31,7 @@ using MHServerEmu.Games.Leaderboards;
 using MHServerEmu.Games.Loot;
 using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.Missions;
+using MHServerEmu.Games.MTXStore;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Populations;
@@ -93,6 +95,8 @@ namespace MHServerEmu.Games.Entities
         private readonly EventPointer<TeleportToPartyMemberEvent> _teleportToPartyMemberEvent = new();
         private readonly EventGroup _pendingEvents = new();
 
+        private readonly PropertyCollection _permaBuffProperties = new();
+
         private ReplicatedPropertyCollection _avatarProperties = new();
         private ulong _shardId;     // This was probably used for database sharding, we don't need this
         private RepVar_string _playerName = new();
@@ -131,6 +135,7 @@ namespace MHServerEmu.Games.Entities
         public ArchiveVersion LastSerializedArchiveVersion { get; private set; } = ArchiveVersion.Current;    // Updated on serialization
 
         public MissionManager MissionManager { get; private set; }
+        public PropertyCollection AvatarProperties { get => _avatarProperties; }
         public MatchQueueStatus MatchQueueStatus { get; private set; } = new();
         public Community Community { get => _community; }
         public GameplayOptions GameplayOptions { get; private set; } = new();
@@ -202,6 +207,9 @@ namespace MHServerEmu.Games.Entities
 
             Game.EntityManager.AddPlayer(this);
             MatchQueueStatus.SetOwner(this);
+
+            // Perma buff properties are attached as child to avatar properties because avatar properties are persistent, while perma buffs are not.
+            _avatarProperties.AddChildCollection(_permaBuffProperties);
 
             _community = new(this);
             _community.Initialize();
@@ -275,6 +283,22 @@ namespace MHServerEmu.Games.Entities
 
                     if (Power.IsCooldownPersistent(powerProto))
                         Properties[PropertyEnum.PowerCooldownStartTimePersistent, powerProtoRef] = newValue;
+
+                    break;
+                }
+
+                case PropertyEnum.RunestonesAmount:
+                {
+                    var region = GetRegion();
+                    if (region == null || region.MetaGames.Count == 0) break;
+                    var manager = Game.EntityManager;
+
+                    foreach (var metagameId in region.MetaGames)
+                    {
+                        var pvp = manager.GetEntity<PvP>(metagameId);
+                        if (pvp == null) continue;
+                        pvp.UpdateRunestonesScore(this, newValue);
+                    }
 
                     break;
                 }
@@ -484,6 +508,8 @@ namespace MHServerEmu.Games.Entities
 
             // Enter game to become added to the AOI
             base.EnterGame(settings);
+
+            InitPermaBuffs();
 
             OnEnterGameInitStashTabOptions();
 
@@ -1435,6 +1461,31 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
+        /// <summary>
+        /// Converts the specified number of Eternity Splinters (ES) to Gazillionite (G). Returns the amount of Gazillionite acquired.
+        /// </summary>
+        public int ConvertEternitySplintersToGazillionite(int esAmount)
+        {
+            PropertyId esPropId = new(PropertyEnum.Currency, GameDatabase.CurrencyGlobalsPrototype.EternitySplinters);
+
+            long esBalance = Properties[esPropId];
+            if (esBalance < esAmount)
+                return 0;
+
+            var config = ConfigManager.Instance.GetConfig<MTXStoreConfig>();
+            int gAmount = Math.Max((int)(esAmount * config.ESToGazillioniteConversionRatio), 0);
+            if (gAmount == 0)
+                return 0;
+
+            if (AcquireGazillionite(gAmount) == false)
+                return 0;
+
+            Properties[esPropId] = esBalance - esAmount;
+
+            Logger.Info($"[{PlayerConnection}] converted {esAmount} ES to {gAmount} G", LogCategory.MTXStore);            
+            return gAmount;
+        }
+
         public bool AwardBonusItemFindPoints(int amount, LootInputSettings settings)
         {
             if (amount <= 0)
@@ -2042,12 +2093,44 @@ namespace MHServerEmu.Games.Entities
 
         public void OnChangeActiveAvatar(int avatarIndex, ulong lastCurrentAvatarId)
         {
-            // TODO: Apply and remove avatar properties stored in the player
+            if (lastCurrentAvatarId != InvalidId)
+            {
+                Avatar lastCurrentAvatar = Game.EntityManager.GetEntity<Avatar>(lastCurrentAvatarId);
+                if (lastCurrentAvatar != null)
+                {
+                    PropertyCollection lastAvatarProperties = lastCurrentAvatar.Properties;
+                    if (_avatarProperties.IsChildOf(lastAvatarProperties))
+                        _avatarProperties.RemoveFromParent(lastAvatarProperties);
+                }
+            }
+
+            Avatar avatar = GetActiveAvatarByIndex(avatarIndex);
+            avatar?.Properties.AddChildCollection(_avatarProperties);
 
             SendMessage(NetMessageCurrentAvatarChanged.CreateBuilder()
                 .SetAvatarIndex(avatarIndex)
                 .SetLastCurrentEntityId(lastCurrentAvatarId)
                 .Build());
+
+            UpdateAvatarAlliance();
+        }
+
+        private void UpdateAvatarAlliance()
+        {
+            var avatar = CurrentAvatar;
+            if (avatar == null) return;
+
+            avatar.Properties[PropertyEnum.AllianceOverride] = AvatarProperties[PropertyEnum.AllianceOverride];
+        }
+
+        public void SetAllianceOverride(AlliancePrototype allianceProto)
+        {
+            if (allianceProto == null)
+                AvatarProperties.RemoveProperty(PropertyEnum.AllianceOverride);
+            else
+                AvatarProperties[PropertyEnum.AllianceOverride] = allianceProto.DataRef;
+
+            UpdateAvatarAlliance();
         }
 
         public void OnAvatarCharacterLevelChanged(Avatar avatar)
@@ -2099,6 +2182,38 @@ namespace MHServerEmu.Games.Entities
         public bool HasAvatarAsCappedStarter(Avatar avatar)
         {
             return HasAvatarAsStarter(avatar.PrototypeDataRef) && avatar.CharacterLevel >= Avatar.GetStarterAvatarLevelCap();
+        }
+
+        public bool OwnsItem(PrototypeId itemProtoRef)
+        {
+            if (itemProtoRef == PrototypeId.Invalid) return Logger.WarnReturn(false, "OwnsItem(): itemProtoRef == PrototypeId.Invalid");
+
+            // Avatar unlocks
+            AvatarPrototype avatarProto = itemProtoRef.As<AvatarPrototype>();
+            if (avatarProto != null)
+                return HasAvatarFullyUnlocked(itemProtoRef);
+
+            // Avatar equipment
+            foreach (Avatar avatar in new AvatarIterator(this))
+            {
+                if (InventoryIterator.ContainsMatchingEntity(avatar, itemProtoRef))
+                    return true;
+            }
+
+            // Player inventories
+            foreach (Inventory inventory in new InventoryIterator(this))
+            {
+                if (inventory.Category == InventoryCategory.PlayerAvatars)
+                    continue;
+
+                if (inventory.Category == InventoryCategory.PlayerVendor)
+                    continue;
+
+                if (inventory.ContainsMatchingEntity(itemProtoRef))
+                    return true;
+            }
+
+            return false;
         }
 
         public bool UnlockPowerSpecIndex(int index)
@@ -3625,16 +3740,6 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        private void SetGiftingRestrictions()
-        {
-            // Email is always verified (for now)
-            _emailVerified = true;
-
-            // We are taking advantage of the fact that our database guids include account creation timestamp.
-            // Review this code if this ever changes.
-            _accountCreationTimestamp = TimeSpan.FromSeconds(DatabaseUniqueId >> 16 & 0xFFFFFFFF);
-        }
-
         #endregion
 
         #region Communities
@@ -3992,6 +4097,125 @@ namespace MHServerEmu.Games.Entities
             using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
             teleporter.Initialize(this, TeleportContextEnum.TeleportContext_Party);
             return teleporter.TeleportToPlayer(targetPlayerDbId);
+        }
+
+        #endregion
+
+        #region MTXStore
+
+        public bool IsGiftingAllowed()
+        {
+            // This function mirrors the client-side check and does not include any custom restrictions.
+            NetStructGameOptions options = Game.GameOptions;
+
+            if (_emailVerified == false)
+                return false;
+
+            TimeSpan accountAge = Clock.UnixTime - _accountCreationTimestamp;
+
+            if ((int)accountAge.TotalDays < options.GiftingAccountAgeInDaysRequired)
+                return false;
+
+            if (Properties.HasProperty(PropertyEnum.PlayerMaxAvatarLevel) == false)
+                return false;
+
+            if (Properties[PropertyEnum.PlayerMaxAvatarLevel] < options.GiftingAvatarLevelRequired)
+                return false;
+
+            if (Properties[PropertyEnum.LoginCount] < options.GiftingLoginCountRequired)
+                return false;
+
+            return true;
+        }
+
+        private void SetGiftingRestrictions()
+        {
+            // Email is always verified (for now)
+            _emailVerified = true;
+
+            // We are taking advantage of the fact that our database guids include account creation timestamp.
+            // Review this code if this ever changes.
+            _accountCreationTimestamp = TimeSpan.FromSeconds(DatabaseUniqueId >> 16 & 0xFFFFFFFF);
+        }
+
+        #endregion
+
+        #region Perma Buffs
+
+        public bool UnlockPermaBuff(PrototypeId permaBuffProtoRef)
+        {
+            if (Properties[PropertyEnum.PermaBuff, permaBuffProtoRef])
+                return Logger.WarnReturn(false, $"UnlockPermaBuff(): PermaBuff {permaBuffProtoRef.GetName()} is already unlocked for player [{this}]");
+
+            Properties[PropertyEnum.PermaBuff, permaBuffProtoRef] = true;
+
+            if (ApplyPermaBuff(permaBuffProtoRef) == false)
+                return Logger.WarnReturn(false, $"UnlockPermaBuff(): Failed to apply PermaBuff {permaBuffProtoRef.GetName()} to player [{this}]");
+
+            SendMessage(NetMessagePermaBuffUnlock.CreateBuilder()
+                .SetPermaBuffProtoId((ulong)permaBuffProtoRef)
+                .Build());
+
+            return true;
+        }
+
+        private void InitPermaBuffs()
+        {
+            _permaBuffProperties.Clear();
+
+            using PropertyCollection unlockedPermaBuffs = ObjectPoolManager.Instance.Get<PropertyCollection>();
+            unlockedPermaBuffs.CopyPropertyRange(Properties, PropertyEnum.PermaBuff);
+
+            foreach (var kvp in unlockedPermaBuffs.IteratePropertyRange(PropertyEnum.PermaBuff))
+            {
+                Property.FromParam(kvp.Key, 0, out PrototypeId permaBuffProtoRef);
+                if (permaBuffProtoRef == PrototypeId.Invalid)
+                {
+                    Logger.Warn("InitPermaBuffs(): permaBuffProtoRef == PrototypeId.Invalid");
+                    continue;
+                }
+
+                if (ApplyPermaBuff(permaBuffProtoRef) == false)
+                    Logger.Warn($"InitPermaBuffs(): Failed to apply PermaBuff {permaBuffProtoRef.GetName()} to player [{this}]");
+            }
+        }
+
+        private bool ApplyPermaBuff(PrototypeId permaBuffProtoRef)
+        {
+            PermaBuffPrototype permaBuffProto = permaBuffProtoRef.As<PermaBuffPrototype>();
+            if (permaBuffProto == null) return Logger.WarnReturn(false, "ApplyPermaBuff(): permaBuffProto == null");
+
+            if (permaBuffProto.EvalAvatarProperties == null)
+                return true;
+
+            using PropertyCollection tempProps = ObjectPoolManager.Instance.Get<PropertyCollection>();
+            
+            using EvalContextData evalContext = ObjectPoolManager.Instance.Get<EvalContextData>();
+            evalContext.SetVar_PropertyCollectionPtr(EvalContext.Default, tempProps);
+            Eval.RunBool(permaBuffProto.EvalAvatarProperties, evalContext);
+
+            PropertyInfoTable propInfoTable = GameDatabase.PropertyInfoTable;
+            foreach (var kvp in tempProps)
+            {
+                PropertyInfo propInfo = propInfoTable.LookupPropertyInfo(kvp.Key.Enum);
+
+                switch (propInfo.DataType)
+                {
+                    case PropertyDataType.Real:
+                        _permaBuffProperties.AdjustProperty((float)kvp.Value, kvp.Key);
+                        break;
+
+                    case PropertyDataType.Integer:
+                        _permaBuffProperties.AdjustProperty((int)kvp.Value, kvp.Key);
+                        break;
+
+                    default:
+                        Logger.Warn($"ApplyPermaBuff(): The following PermaBuff contains non-numeric property(ies), which is not currently supported!\nPermaBuff: [{permaBuffProtoRef.GetName()}]");
+                        break;
+                }
+            }
+
+            return true;
         }
 
         #endregion

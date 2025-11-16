@@ -23,6 +23,7 @@ using MHServerEmu.Games.GameData.Calligraphy;
 using MHServerEmu.Games.GameData.LiveTuning;
 using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Loot;
+using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.Missions;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Network;
@@ -727,6 +728,10 @@ namespace MHServerEmu.Games.Entities
             // Never simulate when not in the world
             if (IsInWorld == false)
                 return SetSimulated(false);
+
+            // PvP regions force simulation of everything
+            if (Region.Prototype.ForceSimulation)
+                return SetSimulated(true);
 
             // Simulate if the prototype is flagged as always simulated
             if (WorldEntityPrototype?.AlwaysSimulated == true)
@@ -1611,13 +1616,13 @@ namespace MHServerEmu.Games.Entities
 
                     if (caster.AssignPower(procPowerProtoRef, indexProps, true, triggeringPowerRef) == null)
                     {
-                        Logger.Warn($"UpdateProcEffectPowers(): Failed to assign {procPowerProtoRef.GetName()} to [{this}]");
+                        Logger.Warn($"UpdateProcEffectPowers(): Failed to assign {procPowerProtoRef.GetName()} to [{caster}]");
                         success = false;
                     }
                 }
                 else
                 {
-                    UnassignPower(procPowerProtoRef);
+                    caster.UnassignPower(procPowerProtoRef);
                 }
 
                 // Try to active certain proc trigger types right away
@@ -3879,25 +3884,16 @@ namespace MHServerEmu.Games.Entities
 
         private bool AwardLootForDropEvent(LootDropEventType eventType, List<Player> playerList, float healthDelta = 0f)
         {
-            const int MaxTables = 8;    // The maximum we've seen in 1.52 prototypes is 4, double this just in case
-
             // Check if we have any players to award loot to
             if (playerList.Count == 0)
                 return true;
 
-            // TODO: Change Span to a pooled list?
-            Span<(PrototypeId, LootActionType)> tables = stackalloc (PrototypeId, LootActionType)[MaxTables];
+            List<(PrototypeId, LootActionType)> tables = ListPool<(PrototypeId, LootActionType)>.Instance.Get();
             List<PropertyId> tablesToRemove = ListPool<PropertyId>.Instance.Get();
-            int numTables = 0;
 
+            // Property loot tables
             foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.LootTablePrototype, (int)eventType))
             {
-                if (numTables >= MaxTables)
-                {
-                    Logger.Warn($"AwardLootForDropEvent(): Exceeded the maximum number of loot tables in {this}");
-                    break;
-                }
-
                 switch (eventType)
                 {
                     case LootDropEventType.OnHealthBelowPctHit:
@@ -3943,13 +3939,36 @@ namespace MHServerEmu.Games.Entities
                     continue;
                 }
 
-                tables[numTables++] = (lootTableProtoRef, actionType);
+                tables.Add((lootTableProtoRef, actionType));
             }
 
-            if (numTables > 0)
+            // PvP loot tables
+            if (eventType == LootDropEventType.OnKilled && this is Avatar)
             {
-                tables = tables[..numTables];
+                Region region = Region;
+                if (region != null)
+                {
+                    EntityManager entityManager = Game.EntityManager;
+                    foreach (ulong metaGameId in region.MetaGames)
+                    {
+                        PvP pvp = entityManager.GetEntity<PvP>(metaGameId);
+                        if (pvp == null)
+                            continue;
 
+                        if (pvp.Prototype is not PvPPrototype pvpProto)
+                            continue;
+
+                        PrototypeId pvpLootTableRef = pvpProto.AvatarKilledLootTable;
+                        if (pvpLootTableRef == PrototypeId.Invalid)
+                            continue;
+
+                        tables.Add((pvpLootTableRef, LootActionType.Spawn));
+                    }
+                }
+            }
+
+            if (tables.Count > 0)
+            {
                 // Roll and distribute the rewards
                 int recipientId = 1;
                 foreach (Player player in playerList)
@@ -3964,6 +3983,7 @@ namespace MHServerEmu.Games.Entities
                     Properties.RemoveProperty(tableProp);
             }
 
+            ListPool<(PrototypeId, LootActionType)>.Instance.Return(tables);
             ListPool<PropertyId>.Instance.Return(tablesToRemove);
             return true;
         }

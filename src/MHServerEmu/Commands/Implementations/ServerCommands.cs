@@ -4,6 +4,8 @@ using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Network;
 using MHServerEmu.DatabaseAccess.Models;
 using MHServerEmu.Games.GameData.LiveTuning;
+using MHServerEmu.Games.MTXStore;
+using MHServerEmu.WebFrontend;
 
 namespace MHServerEmu.Commands.Implementations
 {
@@ -21,7 +23,7 @@ namespace MHServerEmu.Commands.Implementations
             StringBuilder sb = new();
             sb.AppendLine("Server Status");
             sb.AppendLine(ServerApp.VersionInfo);
-            sb.Append(ServerManager.Instance.GetServerStatus(client == null));
+            sb.Append(ServerManager.Instance.GetServerStatusString());
             string status = sb.ToString();
 
             // Display in the console as is
@@ -56,6 +58,39 @@ namespace MHServerEmu.Commands.Implementations
         public string ReloadLiveTuning(string[] @params, NetClient client)
         {
             LiveTuningManager.Instance.LoadLiveTuningDataFromDisk();
+            return string.Empty;
+        }
+
+        [Command("reloadcatalog")]
+        [CommandDescription("Reloads MTX store catalog.")]
+        [CommandUsage("server reloadcatalog")]
+        [CommandUserLevel(AccountUserLevel.Admin)]
+        [CommandInvokerType(CommandInvokerType.ServerConsole)]
+        public string ReloadCatalog(string[] @params, NetClient client)
+        {
+            CatalogManager.Instance.LoadEntries();
+            return string.Empty;
+        }
+
+        [Command("reloaddashboard")]
+        [CommandDescription("Reloads the web dashboard.")]
+        [CommandUserLevel(AccountUserLevel.Admin)]
+        [CommandInvokerType(CommandInvokerType.ServerConsole)]
+        public string ReloadDashboard(string[] @params, NetClient client)
+        {
+            WebFrontendService webFrontend = ServerManager.Instance.GetGameService(GameServiceType.WebFrontend) as WebFrontendService;
+            webFrontend?.ReloadDashboard();
+            return string.Empty;
+        }
+
+        [Command("reloadaddg")]
+        [CommandDescription("Reloads the Add G page.")]
+        [CommandUserLevel(AccountUserLevel.Admin)]
+        [CommandInvokerType(CommandInvokerType.ServerConsole)]
+        public string ReloadAddG(string[] @params, NetClient client)
+        {
+            WebFrontendService webFrontend = ServerManager.Instance.GetGameService(GameServiceType.WebFrontend) as WebFrontendService;
+            webFrontend?.ReloadAddGPage();
             return string.Empty;
         }
 

@@ -1,10 +1,10 @@
 ﻿using System.Diagnostics;
 using Gazillion;
-using Google.ProtocolBuffers;
 using MHServerEmu.Core.Config;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Network;
 using MHServerEmu.Games;
+using MHServerEmu.PlayerManagement.Auth;
 using MHServerEmu.PlayerManagement.Games;
 using MHServerEmu.PlayerManagement.Network;
 using MHServerEmu.PlayerManagement.Players;
@@ -111,44 +111,24 @@ namespace MHServerEmu.PlayerManagement
         {
             switch (message)
             {
-                // Message buffers are routed asynchronously rather than in ticks to have the lowest latency possible.
+                // Message buffers are routed right away to have the lowest latency possible.
                 case ServiceMessage.RouteMessageBuffer routeMessagePackage:
                     OnRouteMessageBuffer(routeMessagePackage);
                     break;
 
-                case ServiceMessage.RouteMessage routeMessage:
-                    OnRouteMessage(routeMessage);
-                    break;
-
-                // Service messages are handled in ticks
-                case ServiceMessage.AddClient:
-                case ServiceMessage.RemoveClient:
-                case ServiceMessage.GameInstanceOp:
-                case ServiceMessage.GameInstanceClientOp:
-                case ServiceMessage.CreateRegionResult:
-                case ServiceMessage.RequestRegionShutdown:
-                case ServiceMessage.ChangeRegionRequest:
-                case ServiceMessage.RegionTransferFinished:
-                case ServiceMessage.ClearPrivateStoryRegions:
-                case ServiceMessage.SetDifficultyTierPreference:
-                case ServiceMessage.PlayerLookupByNameRequest:
-                case ServiceMessage.PlayerNameChanged:
-                case ServiceMessage.CommunityStatusUpdate:
-                case ServiceMessage.CommunityStatusRequest:
-                case ServiceMessage.PartyOperationRequest:
-                case ServiceMessage.PartyBoostUpdate:
-                    _serviceMailbox.PostMessage(message);
-                    break;
-
+                // Regular service messages are handled by the service thread when the next tick comes.
                 default:
-                    Logger.Warn($"ReceiveServiceMessage(): Unhandled service message type {typeof(T).Name}");
+                    _serviceMailbox.PostMessage(message);
                     break;
             }
         }
 
-        public string GetStatus()
+        public void GetStatus(Dictionary<string, long> statusDict)
         {
-            return $"Games: {GameHandleManager.GameCount} | Players: {ClientManager.PlayerCount} | Sessions: {SessionManager.ActiveSessionCount} [{SessionManager.PendingSessionCount}]";
+            statusDict["PlayerManagerGames"] = GameHandleManager.GameCount;
+            statusDict["PlayerManagerPlayers"] = ClientManager.PlayerCount;
+            statusDict["PlayerManagerActiveSessions"] = SessionManager.ActiveSessionCount;
+            statusDict["PlayerManagerPendingSessions"] = SessionManager.PendingSessionCount;
         }
 
         private void OnRouteMessageBuffer(in ServiceMessage.RouteMessageBuffer routeMessageBuffer)
@@ -165,19 +145,6 @@ namespace MHServerEmu.PlayerManagement
                     // Route the rest of messages to the GIS
                     ServerManager.Instance.SendMessageToService(GameServiceType.GameInstance, routeMessageBuffer);
                     break;
-            }
-        }
-
-        private void OnRouteMessage(in ServiceMessage.RouteMessage routeMessage)
-        {
-            IFrontendClient client = routeMessage.Client;
-            MailboxMessage message = routeMessage.Message;
-
-            switch ((FrontendProtocolMessage)message.Id)
-            {
-                case FrontendProtocolMessage.ClientCredentials: OnClientCredentials(client, message); break;
-
-                default: Logger.Warn($"Handle(): Unhandled {(ClientToGameServerMessage)message.Id} [{message.Id}]"); break;
             }
         }
 
@@ -205,56 +172,6 @@ namespace MHServerEmu.PlayerManagement
         #endregion
 
         #region Message Handling
-
-        /// <summary>
-        /// Handles <see cref="LoginDataPB"/>.
-        /// </summary>
-        public AuthStatusCode OnLoginDataPB(LoginDataPB loginDataPB, out AuthTicket authTicket)
-        {
-            authTicket = AuthTicket.DefaultInstance;
-
-            var statusCode = SessionManager.TryCreateSessionFromLoginDataPB(loginDataPB, out ClientSession session);
-
-            if (statusCode == AuthStatusCode.Success)
-            {
-                // Avoid extra allocations and copying by using Unsafe.FromBytes() for session key and token
-                authTicket = AuthTicket.CreateBuilder()
-                    .SetSessionKey(ByteString.Unsafe.FromBytes(session.Key))
-                    .SetSessionToken(ByteString.Unsafe.FromBytes(session.Token))
-                    .SetSessionId(session.Id)
-                    .SetFrontendServer(IFrontendClient.FrontendAddress)
-                    .SetFrontendPort(IFrontendClient.FrontendPort)
-                    .SetPlatformTicket("")
-                    .SetHasnews(Config.ShowNewsOnLogin)
-                    .SetNewsurl(Config.NewsUrl)
-                    .SetSuccess(true)
-                    .Build();
-            }
-
-            return statusCode;
-        }
-
-        /// <summary>
-        /// Handles <see cref="ClientCredentials"/>.
-        /// </summary>
-        private bool OnClientCredentials(IFrontendClient client, MailboxMessage message)
-        {
-            var clientCredentials = message.As<ClientCredentials>();
-            if (clientCredentials == null) return Logger.WarnReturn(false, "OnClientCredentials(): clientCredentials == null");
-
-            if (SessionManager.VerifyClientCredentials(client, clientCredentials) == false)
-            {
-                Logger.Warn($"OnClientCredentials(): Failed to verify client credentials, disconnecting client [{client}]");
-                client.Disconnect();
-                return false;
-            }
-
-            // Success!
-            Logger.Info($"Successful auth for client [{client}]");
-            LoginQueueManager.EnqueueNewClient(client);
-
-            return true;
-        }
 
         /// <summary>
         /// Handles <see cref="NetMessageReadyForGameJoin"/>.

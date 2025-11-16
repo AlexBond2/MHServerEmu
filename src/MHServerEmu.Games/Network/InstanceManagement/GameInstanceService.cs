@@ -120,15 +120,24 @@ namespace MHServerEmu.Games.Network.InstanceManagement
                     OnLeaderboardRewardRequestResponse(leaderboardRewardRequestResponse);
                     break;
 
+                case ServiceMessage.MTXStoreESBalanceGameRequest mtxStoreESBalanceGameRequest:
+                    RouteMessageToGame(mtxStoreESBalanceGameRequest.GameId, mtxStoreESBalanceGameRequest);
+                    break;
+
+                case ServiceMessage.MTXStoreESConvertGameRequest mtxStoreESConvertGameRequest:
+                    RouteMessageToGame(mtxStoreESConvertGameRequest.GameId, mtxStoreESConvertGameRequest);
+                    break;
+
                 default:
                     Logger.Warn($"ReceiveServiceMessage(): Unhandled service message type {typeof(T).Name}");
                     break;
             }
         }
 
-        public string GetStatus()
+        public void GetStatus(Dictionary<string, long> statusDict)
         {
-            return $"Games: {GameManager.GameCount} | Players: {GameManager.PlayerCount}";
+            statusDict["GisGames"] = GameManager.GameCount;
+            statusDict["GisPlayers"] = GameManager.PlayerCount;
         }
 
         private bool RouteMessageToGame<T>(ulong gameId, T message) where T: struct, IGameServiceMessage

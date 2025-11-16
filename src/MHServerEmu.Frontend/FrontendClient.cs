@@ -3,7 +3,7 @@ using Google.ProtocolBuffers;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Network;
 using MHServerEmu.Core.Network.Tcp;
-using MHServerEmu.Core.System;
+using MHServerEmu.Core.RateLimiting;
 using MHServerEmu.DatabaseAccess;
 using MHServerEmu.DatabaseAccess.Models;
 
@@ -14,14 +14,13 @@ namespace MHServerEmu.Frontend
     /// </summary>
     public class FrontendClient : TcpClient, IFrontendClient, IDBAccountOwner
     {
-        // We are currently allowing 50 packets per seconds with up to 10 seconds of burst.
-        // Given our current receive buffer size of 8 KB, this limits client input at about 400 KB/s.
-        private const int RateLimitPacketsPerSecond = 50;
-        private const int RateLimitBurst = RateLimitPacketsPerSecond * 10;
+        // Rate limit at 8 KB/s with a bit of burst allowed.
+        private const int RateLimitBytesPerSecond = 1024 * 8;
+        private const int RateLimitBurst = RateLimitBytesPerSecond * 10;
 
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        private readonly TokenBucket _tokenBucket = new(RateLimitPacketsPerSecond, RateLimitBurst);
+        private readonly TokenBucket _tokenBucket = new(RateLimitBytesPerSecond, RateLimitBurst);
         private readonly MuxReader _muxReader;
 
         // We intentionally don't use an array here so that channel state is inlined in FrontendClient
@@ -138,7 +137,7 @@ namespace MHServerEmu.Frontend
         /// </summary>
         public void HandleIncomingData(byte[] buffer, int length)
         {
-            if (_tokenBucket.CheckLimit() == false)
+            if (_tokenBucket.CheckLimit(length) == false)
             {
                 Logger.Error($"HandleIncomingData(): Rate limit exceeded for client [{this}]");
                 Disconnect();
@@ -241,10 +240,10 @@ namespace MHServerEmu.Frontend
                 var clientCredentials = messageBuffer.Deserialize<FrontendProtocolMessage>() as ClientCredentials;
                 if (clientCredentials == null) return Logger.ErrorReturn(false, $"OnClientCredentials(): Failed to retrieve message");
 
-                // Routing this message should authenticate the client if the credentials are successfully verified
-                MailboxMessage mailboxMessage = new(messageBuffer.MessageId, clientCredentials);
-                ServiceMessage.RouteMessage routeMessage = new(_client, typeof(FrontendProtocolMessage), mailboxMessage);
-                ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, routeMessage);
+                // Routing this message should authenticate the client if the credentials are successfully verified.
+                // If we ever split the frontend into a separate process we will need to replicate session assignment between the processes.
+                ServiceMessage.SessionVerificationRequest sessionVerificationRequest = new(_client, clientCredentials);
+                ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, sessionVerificationRequest);
 
                 return true;
             }

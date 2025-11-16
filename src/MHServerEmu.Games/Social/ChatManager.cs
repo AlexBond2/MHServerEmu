@@ -5,6 +5,7 @@ using MHServerEmu.Core.Network;
 using MHServerEmu.Games.Common;
 using MHServerEmu.Games.Entities;
 using MHServerEmu.Games.GameData;
+using MHServerEmu.Games.MetaGames;
 using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Regions;
 using MHServerEmu.Games.Social.Communities;
@@ -77,8 +78,11 @@ namespace MHServerEmu.Games.Social
                     SendChatToParty(player, chat);
                     break;
 
-                case ChatRoomTypes.CHAT_ROOM_TYPE_GUILD:
                 case ChatRoomTypes.CHAT_ROOM_TYPE_FACTION:
+                    SendChatToPvPTeam(player, chat);
+                    break;
+
+                case ChatRoomTypes.CHAT_ROOM_TYPE_GUILD:
                 case ChatRoomTypes.CHAT_ROOM_TYPE_GUILD_OFFICER:
                     // TODO, send a Service Unavailable message for now
                     SendServiceUnavailableMessage(player);
@@ -94,7 +98,7 @@ namespace MHServerEmu.Games.Social
         {
             // Route to the grouping manager
             int prestigeLevel = player.CurrentAvatar != null ? player.CurrentAvatar.PrestigeLevel : 0;
-            ServiceMessage.GroupingManagerTell serviceMessage = new(player.PlayerConnection.FrontendClient, tell, prestigeLevel);
+            ServiceMessage.GroupingManagerTell serviceMessage = new(player.DatabaseUniqueId, tell, prestigeLevel);
             ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, serviceMessage);
         }
 
@@ -189,6 +193,42 @@ namespace MHServerEmu.Games.Social
 
         #endregion
 
+        #region ChatFromMetaGame
+
+        public bool SendChatFromMetaGame(LocaleStringId localeString, List<PlayerConnection> clientList, 
+            Player player1, Player player2, LocaleStringId arg = LocaleStringId.Blank)
+        {
+            if (localeString == LocaleStringId.Invalid) return Logger.WarnReturn(false, "SendChatFromMetaGame(): localeString == LocaleStringId.Invalid");
+
+            if (clientList.Count == 0)
+                return true;
+
+            var message = NetMessageChatFromMetaGame.CreateBuilder()
+                .SetSourceStringId((ulong)GameDatabase.GlobalsPrototype.MetaGameLocalized)
+                .SetMessageStringId((ulong)localeString);
+
+            if (arg != LocaleStringId.Blank) message.AddArgStringIds((ulong)arg);
+            if (player1 != null) message.SetPlayerName1(player1.GetName());
+            if (player2 != null) message.SetPlayerName2(player2.GetName());
+
+            Game.NetworkManager.SendMessageToMultiple(clientList, message.Build());
+            return true;
+        }
+
+        #endregion
+
+        #region Custom System Messages
+
+        // This is used to send our custom system messages that the client does not have locale strings for.
+
+        public void SendChatFromCustomSystem(Player player, string text, bool showSender = true)
+        {
+            ServiceMessage.GroupingManagerMetagameMessage message = new(player.DatabaseUniqueId, text, showSender);
+            ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, message);
+        }
+
+        #endregion
+
         #region Helper Methods
 
         // NOTE: It's not safe to pool filter lists here because the implementation of the grouping manager may change.
@@ -240,10 +280,24 @@ namespace MHServerEmu.Games.Social
             return true;
         }
 
+        private bool SendChatToPvPTeam(Player player, NetMessageChat chat)
+        {
+            MetaGameTeam team = player.GetPvPTeam();
+            if (team == null)
+                return false;
+
+            List<ulong> playerFilter = new();
+            foreach (Player teamPlayer in team)
+                playerFilter.Add(teamPlayer.DatabaseUniqueId);
+
+            SendChat(player, chat, playerFilter);
+            return true;
+        }
+
         private void SendChat(Player player, NetMessageChat chat, List<ulong> playerFilter)
         {
             int prestigeLevel = player.CurrentAvatar != null ? player.CurrentAvatar.PrestigeLevel : 0;
-            ServiceMessage.GroupingManagerChat chatMessage = new(player.PlayerConnection.FrontendClient, chat, prestigeLevel, playerFilter);
+            ServiceMessage.GroupingManagerChat chatMessage = new(player.DatabaseUniqueId, chat, prestigeLevel, playerFilter);
             ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, chatMessage);
         }
 
