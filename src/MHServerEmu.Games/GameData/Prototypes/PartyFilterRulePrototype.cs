@@ -61,7 +61,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
         //---
 
-        public bool Evaluate(List<AvatarPrototype> members, List<CostumePrototype> costumes, int playerIndex)
+        public bool Evaluate(List<AvatarPrototype> members, List<CostumePrototype> costumes)
         {
             int matches = members.Count;
             if (matches < NumberRequired || Rules.IsNullOrEmpty() || matches != costumes.Count)
@@ -91,7 +91,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                     if ((++numMatches) == NumberRequired && AllowOutsiders && AllUniqueAvatars == false)
                         return true;
                 }
-                else if (i == playerIndex || AllowOutsiders == false)
+                else if (AllowOutsiders == false)
                 {
                     return false;
                 }

@@ -3965,7 +3965,7 @@ namespace MHServerEmu.Games.Entities
             LeaderboardManager.OnUpdateEventContext();
         }
 
-        private void UpdatePartyFilters(List<AvatarPrototype> avatars, List<CostumePrototype> costumes, int playerIndex)
+        private void UpdatePartyFilters(List<AvatarPrototype> avatars, List<CostumePrototype> costumes)
         {
             bool updateContext = false;
 
@@ -3977,7 +3977,7 @@ namespace MHServerEmu.Games.Entities
                 foreach (PrototypeId partyFilterProtoRef in DataDirectory.Instance.IteratePrototypesInHierarchy<PartyFilterPrototype>(PrototypeIterateFlags.NoAbstractApprovedOnly))
                 {
                     PartyFilterPrototype partyFilterProto = partyFilterProtoRef.As<PartyFilterPrototype>();
-                    if (partyFilterProto.Evaluate(avatars, costumes, playerIndex))
+                    if (partyFilterProto.Evaluate(avatars, costumes))
                         newFilters.Add(partyFilterProtoRef);
                 }
 
@@ -4372,12 +4372,6 @@ namespace MHServerEmu.Games.Entities
             using var avatarsHandle = ListPool<AvatarPrototype>.Instance.Get(out List<AvatarPrototype> avatars);
             using var costumesHandle = ListPool<CostumePrototype>.Instance.Get(out List<CostumePrototype> costumes);
 
-            ulong playerDbId = DatabaseUniqueId;
-            int playerIndex = -1;
-            AvatarPrototype playerAvatar = null;
-            CostumePrototype playerCostume = null;
-
-            int i = 0;
             foreach (CommunityMember member in Community.IterateMembers(partyCircle))
             {
                 AvatarSlotInfo slot = member.GetAvatarSlotInfo();
@@ -4398,28 +4392,11 @@ namespace MHServerEmu.Games.Entities
                     continue;
                 }
 
-                if (member.DbId == playerDbId)
-                {
-                    playerAvatar = avatarProto;
-                    playerCostume = costumeProto;
-                    playerIndex = 0;
-                }
-                else
-                {
-                    avatars.Add(avatarProto);
-                    costumes.Add(costumeProto);
-                    i++;
-                }
+                avatars.Add(avatarProto);
+                costumes.Add(costumeProto);
             }
 
-            if (playerIndex == 0)
-            {
-                avatars.Add(playerAvatar);
-                costumes.Add(playerCostume);
-                playerIndex = i;
-            }
-
-            UpdatePartyFilters(avatars, costumes, playerIndex);
+            UpdatePartyFilters(avatars, costumes);
 
             return true;
         }
