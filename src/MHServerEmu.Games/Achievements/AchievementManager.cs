@@ -32,7 +32,9 @@ namespace MHServerEmu.Games.Achievements
     public class AchievementManager
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
-
+        private bool _debug = false;
+        private const int DebugAchievementId = 867;
+        private DateTime _lastInvalidation = DateTime.MinValue;
         private bool _cachingActives;
         private bool _scoring;
         private bool _cachedActives;
@@ -56,6 +58,7 @@ namespace MHServerEmu.Games.Achievements
             _rewardEvent = new();
             _pendingEvents = new();
             Owner = owner;
+            _debug = true;
         }
 
         public void Deallocate()
@@ -76,21 +79,41 @@ namespace MHServerEmu.Games.Achievements
 
         public void OnScoringEvent(in ScoringEvent scoringEvent, ulong entityId = Entity.InvalidId)
         {
+            bool debug_event = _debug && scoringEvent.Type == ScoringEventType.EntityDeath;
             if (AchievementsEnabled == false || _cachingActives) return;
+            if (debug_event) Logger.Debug($"[{Owner.GetName()}] OnScoringEvent: Type={scoringEvent.Type}, Count={scoringEvent.Count}, _cachedActives={_cachedActives}");
 
             if (_cachedActives == false && _scoring == false)
+            {
+                if (_debug) Logger.Debug($"[{Owner.GetName()}] Triggering RebuildActivesCache from OnScoringEvent({scoringEvent.Type})");
                 RebuildActivesCache();
+            }
 
             _scoring = true;
 
             var instance = AchievementDatabase.Instance;
             if (_activeAchievements.TryGetValue(scoringEvent.Type, out var actives))
-                foreach (var active in actives) 
-                    if (FilterEventData(scoringEvent, active.Data))
+            {
+                if (debug_event) Logger.Debug($"[{Owner.GetName()}] Found {actives.Count} active achievements for type {scoringEvent.Type}");
+                foreach (var active in actives)
+                {
+                    bool filtered = FilterEventData(scoringEvent, active.Data);
+                    if (debug_event && active.Id == DebugAchievementId) Logger.Debug($"[{Owner.GetName()}] Achievement {active.Id}: FilterEventData={filtered}");
+
+                    if (filtered)
                     {
                         var info = instance.GetAchievementInfoById(active.Id);
+                        if (debug_event && active.Id == DebugAchievementId) Logger.Debug($"[{Owner.GetName()}] UpdateAchievement {active.Id}: Count={scoringEvent.Count}");
                         UpdateAchievement(info, scoringEvent.Count, true, true, active, entityId);
                     }
+                }
+            }
+            else if (debug_event)
+            {
+                Logger.Warn($"[{Owner.GetName()}] No active achievements for type {scoringEvent.Type}. Total types in cache: {_activeAchievements.Count}");
+                Logger.Debug($"[{Owner.GetName()}] Available types: {string.Join(", ", _activeAchievements.Keys)}");
+
+            }
 
             _scoring = false;
         }
@@ -105,11 +128,22 @@ namespace MHServerEmu.Games.Achievements
         public void OnUpdateEventContext()
         {
             if (AchievementsEnabled == false) return;
+            if (_debug)
+            {
+                _lastInvalidation = DateTime.UtcNow;
+                Logger.Debug($"[{Owner.GetName()}] OnUpdateEventContext called, invalidating actives cache");
+            }
             _cachedActives = false;
         }
 
         private void RebuildActivesCache()
         {
+            if (_debug)
+            {
+                var timeSinceInvalidation = DateTime.UtcNow - _lastInvalidation;
+                Logger.Debug($"[{Owner.GetName()}] RebuildActivesCache STARTED (time since invalidation: {timeSinceInvalidation.TotalMilliseconds:F0}ms)");
+            }
+
             _cachedActives = true;
 
             ActiveAchievementsStateUpdate();
@@ -121,10 +155,23 @@ namespace MHServerEmu.Games.Achievements
 
             _cachingActives = true;
 
+            int totalProcessed = 0;
+            int addedToCache = 0;
+
             foreach (AchievementInfo info in AchievementDatabase.Instance.AchievementInfoMap)
             {
+                totalProcessed++;
                 var progress = state.GetAchievementProgress(info.Id);
-                if (progress.IsComplete == false && state.IsAvailable(info) && FilterPlayerContext(info))
+                bool isComplete = progress.IsComplete;
+                bool isAvailable = state.IsAvailable(info);
+                bool passesFilter = FilterPlayerContext(info);
+
+                if (_debug && info.Id == DebugAchievementId)
+                {
+                    Logger.Debug($"[{Owner.GetName()}] Processing achievement {info.Id}: IsComplete={isComplete}, IsAvailable={isAvailable}, PassesFilter={passesFilter}, EventType={info.EventType}");
+                }
+
+                if (isComplete == false && isAvailable && passesFilter)
                 {
                     switch (info.EventType)
                     {
@@ -145,14 +192,17 @@ namespace MHServerEmu.Games.Achievements
 
                         default:
                             AddActiveAchievement(info);
+                            addedToCache++;
                             break;
 
                     }
                 }
             }
 
-            _cachingActives = false; 
-            
+            _cachingActives = false;
+
+            if (_debug) Logger.Debug($"[{Owner.GetName()}] RebuildActivesCache COMPLETED: Processed={totalProcessed}, AddedToCache={addedToCache}, TotalTypes={_activeAchievements.Count}");
+
             uint newScore = state.GetTotalStats().Score;
             if (oldScore != newScore) ScheduleUpdateScoreEvent();
         }
@@ -169,6 +219,9 @@ namespace MHServerEmu.Games.Achievements
                 list = new();
                 _activeAchievements[info.EventType] = list;
             }
+
+            if (_debug && info.Id == DebugAchievementId) Logger.Debug($"[{Owner.GetName()}] AddActiveAchievement: Achievement {DebugAchievementId} added to cache for EventType={info.EventType}");
+
             list.Add(new(info));
         }
 
@@ -183,7 +236,19 @@ namespace MHServerEmu.Games.Achievements
 
         private bool FilterPlayerContext(AchievementInfo info)
         {
-            return info.EventContext.FilterOwnerContext(Owner, Owner.ScoringEventContext);
+            bool result = info.EventContext.FilterOwnerContext(Owner, Owner.ScoringEventContext);
+            if (_debug && info.Id == DebugAchievementId)
+            {
+                var filters = Owner.ScoringEventContext.PartyFilters;
+                bool containsParty = filters != null && filters.Contains(info.EventContext.Party.DataRef);
+
+                Logger.Debug($"[{Owner.GetName()}] FilterPlayerContext({DebugAchievementId}): " +
+                             $"Result={result}, " +
+                             $"PartyFilters={(filters == null ? null : filters.Count)}, " +
+                             $"Party={info.EventContext.Party}, " +
+                             $"PartyContain=[{containsParty}]");
+            }
+            return result;
         }
 
         private void UpdateAchievement(AchievementInfo info, int count, bool showPopups = true, bool fromEvent = false, ActiveAchievement active = null, ulong entityId = Entity.InvalidId)

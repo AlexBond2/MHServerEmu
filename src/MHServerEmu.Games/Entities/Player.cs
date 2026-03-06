@@ -3996,7 +3996,10 @@ namespace MHServerEmu.Games.Entities
             }
 
             if (updateContext)
+            {
+                Logger.Debug($"[PARTY] [{GetName()}] Added to PartyFilters {PartyFilters.Count}, Avatars: {avatars.Count}, triggering OnUpdateEventContext");
                 UpdateScoringEventContext();
+            }
         }
 
         #endregion
