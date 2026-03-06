@@ -4374,6 +4374,8 @@ namespace MHServerEmu.Games.Entities
 
             ulong playerDbId = DatabaseUniqueId;
             int playerIndex = -1;
+            AvatarPrototype playerAvatar = null;
+            CostumePrototype playerCostume = null;
 
             int i = 0;
             foreach (CommunityMember member in Community.IterateMembers(partyCircle))
@@ -4396,13 +4398,25 @@ namespace MHServerEmu.Games.Entities
                     continue;
                 }
 
-                avatars.Add(avatarProto);
-                costumes.Add(costumeProto);
-
                 if (member.DbId == playerDbId)
-                    playerIndex = i;
+                {
+                    playerAvatar = avatarProto;
+                    playerCostume = costumeProto;
+                    playerIndex = 0;
+                }
+                else
+                {
+                    avatars.Add(avatarProto);
+                    costumes.Add(costumeProto);
+                    i++;
+                }
+            }
 
-                i++;
+            if (playerIndex == 0)
+            {
+                avatars.Add(playerAvatar);
+                costumes.Add(playerCostume);
+                playerIndex = i;
             }
 
             UpdatePartyFilters(avatars, costumes, playerIndex);
