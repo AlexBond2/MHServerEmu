@@ -1,21 +1,21 @@
 ﻿using MHServerEmu.Core.Collections;
-using MHServerEmu.Core.System.Random;
-using MHServerEmu.Games.Behavior.ProceduralAI;
-using MHServerEmu.Games.Behavior.StaticAI;
-using MHServerEmu.Games.Behavior;
-using MHServerEmu.Games.Entities;
-using MHServerEmu.Games.Properties;
+using MHServerEmu.Core.Collisions;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Helpers;
+using MHServerEmu.Core.System.Random;
+using MHServerEmu.Core.VectorMath;
+using MHServerEmu.Games.Behavior;
+using MHServerEmu.Games.Behavior.ProceduralAI;
+using MHServerEmu.Games.Behavior.StaticAI;
+using MHServerEmu.Games.Common;
+using MHServerEmu.Games.Entities;
+using MHServerEmu.Games.Entities.Avatars;
 using MHServerEmu.Games.Entities.Locomotion;
 using MHServerEmu.Games.GameData.Calligraphy;
-using MHServerEmu.Core.Collisions;
-using MHServerEmu.Games.Regions;
-using MHServerEmu.Core.VectorMath;
 using MHServerEmu.Games.Navi;
 using MHServerEmu.Games.Powers;
-using MHServerEmu.Games.Entities.Avatars;
-using MHServerEmu.Games.Common;
+using MHServerEmu.Games.Properties;
+using MHServerEmu.Games.Regions;
 
 namespace MHServerEmu.Games.GameData.Prototypes
 {
@@ -101,7 +101,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 List<WorldEntity> validTargets = new (MaxTargets);
 
                 var volume = new Sphere(agent.RegionLocation.Position, SpecialPowerMaxRadius);
-                foreach (var targetInSphere in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.ActivePartition)))
+                foreach (var targetInSphere in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.PrimaryPartition)))
                 {
                     if (validTargets.Count >= MaxTargets) break;
                     if (targetInSphere == null) continue;
@@ -115,7 +115,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 {
                     if (validTarget == null) return;
 
-                    RegionLocation targetRegionLoc = validTarget.RegionLocation;
+                    ref RegionLocation targetRegionLoc = ref validTarget.RegionLocation;
                     if (ownerController.AttemptActivatePower(SpecialSummonPower, validTarget.Id, targetRegionLoc.ProjectToFloor()) == false) return;
 
                     targetSummoned++;
@@ -126,10 +126,11 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 if (targetSummoned < SpecialPowerNumSummons)
                     for (int j = targetSummoned; j < SpecialPowerNumSummons; ++j)
                     {
-                        Bounds bounds = new(agent.Bounds)
-                        { Center = agent.RegionLocation.ProjectToFloor() };
+                        Bounds bounds = agent.Bounds;   // copy
+                        bounds.Center = agent.RegionLocation.ProjectToFloor();
+
                         region.ChooseRandomPositionNearPoint(
-                            bounds,
+                            ref bounds,
                             Region.GetPathFlagsForEntity(agent.WorldEntityPrototype),
                             PositionCheckFlags.CanBeBlockedEntity | PositionCheckFlags.CanSweepTo | PositionCheckFlags.PreferNoEntity,
                             BlockingCheckFlags.None,
@@ -2588,7 +2589,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 List<WorldEntity> validTargets = new(MaxTargets);
 
                 var volume = new Sphere(agent.RegionLocation.Position, SpecialPowerMaxRadius);
-                foreach (var targetInSphere in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (var targetInSphere in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                 {
                     if (validTargets.Count >= MaxTargets) break;
                     if (targetInSphere == null) continue;
@@ -2602,7 +2603,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 {
                     if (validTarget == null) return;
 
-                    RegionLocation targetRegionLoc = validTarget.RegionLocation;
+                    ref RegionLocation targetRegionLoc = ref validTarget.RegionLocation;
                     if (ownerController.AttemptActivatePower(SpecialSummonPower, validTarget.Id, targetRegionLoc.ProjectToFloor()) == false) return;
 
                     targetSummoned++;
@@ -2613,10 +2614,11 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 if (targetSummoned < SpecialPowerNumSummons)
                     for (int j = targetSummoned; j < SpecialPowerNumSummons; ++j)
                     {
-                        Bounds bounds = new(agent.Bounds)
-                        { Center = agent.RegionLocation.ProjectToFloor() };
+                        Bounds bounds = agent.Bounds;  // copy
+                        bounds.Center = agent.RegionLocation.ProjectToFloor();
+
                         region.ChooseRandomPositionNearPoint(
-                            bounds,
+                            ref bounds,
                             Region.GetPathFlagsForEntity(agent.WorldEntityPrototype),
                             PositionCheckFlags.CanBeBlockedEntity | PositionCheckFlags.CanSweepTo | PositionCheckFlags.PreferNoEntity,
                             BlockingCheckFlags.None,
@@ -2702,7 +2704,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             {
                 if (condition == null) return;
                 var transferId = condition.Properties[PropertyEnum.DamageTransferID];
-                if (transferId != 0)
+                if (transferId != Entity.InvalidId)
                 {
                     var transfer = entityManager.GetEntity<WorldEntity>(transferId);
                     if (transfer != null)
@@ -2714,7 +2716,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             }
 
             if (numTargets > 1)
-                agent.Properties[PropertyEnum.Health] = totalHealth / numTargets;
+                agent.Properties[PropertyEnum.Health] = Math.Max(totalHealth / numTargets, 1);
         }
 
         public override bool OnPowerPicked(AIController ownerController, ProceduralUsePowerContextPrototype powerContext)
@@ -2960,7 +2962,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                         if (region == null) return;
 
                         var volume = new Sphere(agent.RegionLocation.Position, 3200.0f);
-                        foreach (var targetEntity in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.ActivePartition)))
+                        foreach (var targetEntity in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.PrimaryPartition)))
                             if (targetEntity != null && targetEntity.PrototypeDataRef == obeliskDataRef)
                             {
                                 blackboard.PropertyCollection[PropertyEnum.AIAssistedEntityID] = targetEntity.Id;
@@ -3211,7 +3213,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             Region region = agent.Region;
             if (region == null) return;
             Sphere volume = new(agent.RegionLocation.Position, ownerController.AggroRangeHostile);
-            foreach(WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+            foreach(WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
             {
                 if (target != null && target.PrototypeDataRef == WeaponsCrate)
                     blackboard.PropertyCollection[PropertyEnum.AIAssistedEntityID] = target.Id;
@@ -3718,7 +3720,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             Sphere volume = new (agent.RegionLocation.Position, ownerController.AggroRangeHostile);
             Picker<ulong> targetPicker = new (game.Random);
 
-            foreach (var target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+            foreach (var target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                 if (target != null && target.IsHostileTo(agent) && target.IsDead == false 
                     && target != target1 && target != target2 && target != target3)
                 {
@@ -3828,7 +3830,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             if (region == null) return;
 
             Sphere volume = new(agent.RegionLocation.Position, ownerController.AggroRangeHostile);
-            foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+            foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
             {
                 if (target == null) continue;
                 if (target.PrototypeDataRef == PlatformMarkerLeft)
@@ -4426,7 +4428,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 if (game == null) return;
 
                 Sphere volume = new(agent.RegionLocation.Position, NullifierSearchRadius);
-                foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                     if (target is Agent nullifier && PsychicNullifierTargets.Contains(nullifier.PrototypeDataRef))
                     {
                         var nullifierController = nullifier.AIController;
@@ -4505,7 +4507,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 List<WorldEntity> spawnersToDestroy = new();
 
                 var volume = new Sphere(agent.RegionLocation.Position, SpawnerSearchRadius);
-                foreach (var spawnerTarget in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (var spawnerTarget in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                     if (spawnerTarget != null && spawnerTarget.PrototypeDataRef == ShieldEngineerSpawner)
                         spawnersToDestroy.Add(spawnerTarget);
 
@@ -5706,7 +5708,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 float jumpDistance = game.Random.Next(JumpDistanceMin, JumpDistanceMax + 1);
                 LocomotionOptions locomotionOptions = new();
                 locomotionOptions.PathGenerationFlags |= PathGenerationFlags.IncompletedPath;
-                locomotor.MoveTo(agent.RegionLocation.Position + (direction * jumpDistance), locomotionOptions);
+                locomotor.MoveTo(agent.RegionLocation.Position + (direction * jumpDistance), ref locomotionOptions);
             }
         }
     }

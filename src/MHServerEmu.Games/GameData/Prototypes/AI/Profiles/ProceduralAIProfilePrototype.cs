@@ -482,7 +482,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             }
             else
             {
-                foreach (WorldEntity worldEntity in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (WorldEntity worldEntity in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                 {
                     if (worldEntity == null) continue;
 
@@ -703,7 +703,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             if (target == null || target is not Transition)
             {
                 var selectionContext = new SelectEntity.SelectEntityContext(ownerController, SelectPortalToExitFrom);
-                selectionContext.StaticEntities = true;
+                selectionContext.NotAffectedByPowers = true;
                 WorldEntity selectedEntity = SelectEntity.DoSelectEntity(selectionContext);
                 if (selectedEntity != null)
                     SelectEntity.RegisterSelectedEntity(ownerController, selectedEntity, selectionContext.SelectionType);
@@ -899,7 +899,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 float speed = locomotor.GetCurrentSpeed() + random.Next(-MovementSpeedVariance, MovementSpeedVariance);
                 agent.Properties[PropertyEnum.MovementSpeedOverride] = Math.Abs(speed);
                 LocomotionOptions locomotionOptions = new() { BaseMoveSpeed = speed };
-                locomotor.MoveForward(locomotionOptions);
+                locomotor.MoveForward(ref locomotionOptions);
             }
         }
     }
@@ -1145,7 +1145,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 if (region == null) return;
                 float maxRange = ownerController.AggroRangeAlly;
                 Sphere volume = new(agent.RegionLocation.Position, maxRange);
-                foreach (WorldEntity worldEntity in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (WorldEntity worldEntity in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                     if (worldEntity is Agent targetAgent)
                         for (int index = 0; index < SyncAttacks.Length; index++)
                         {
@@ -1234,7 +1234,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             }
 
             EntityManager entityManager = game.EntityManager;
-            List<int> syncAttackIndices = ListPool<int>.Instance.Get();
+            using var syncAttackIndicesHandle = ListPool<int>.Instance.Get(out List<int> syncAttackIndices);
 
             for (int i = 0; i < IDPropertiesLength && i < SyncAttacks.Length; i++)
             {
@@ -1250,8 +1250,6 @@ namespace MHServerEmu.Games.GameData.Prototypes
                 int randomIndex = game.Random.Next(0, syncAttackIndices.Count);
                 index = syncAttackIndices[randomIndex];
             }
-
-            ListPool<int>.Instance.Return(syncAttackIndices);
 
             return index;
         }
@@ -1464,7 +1462,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
             Picker<Agent> targetPicker = new (game.Random);
             Sphere volume = new (agent.RegionLocation.Position, SpikeDanceMobSearchRadius);
-            foreach (var entity in region.IterateEntitiesInVolume(volume, new()))
+            foreach (var entity in region.IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.UnrestrictedPartitions)))
                 if (entity is Agent entityAgent && GameDatabase.DataDirectory.PrototypeIsAPrototype(entityAgent.PrototypeDataRef, SpikeDanceMob))
                     targetPicker.Add(entityAgent);
 

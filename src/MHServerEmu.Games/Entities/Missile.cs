@@ -25,7 +25,8 @@ namespace MHServerEmu.Games.Entities
         private bool _returnWeapon = true;
 
         private Bounds _entityCollideBounds;
-        public override Bounds EntityCollideBounds { get => _entityCollideBounds; set => _entityCollideBounds = value; }
+
+        public override ref Bounds EntityCollideBounds { get => ref _entityCollideBounds; }
         public override bool CanRepulseOthers => false;
         public PrototypeId MissilePowerPrototypeRef { get => Properties[PropertyEnum.CreatorPowerPrototype]; }
         public MissilePowerPrototype MissilePowerPrototype { get => GameDatabase.GetPrototype<MissilePowerPrototype>(MissilePowerPrototypeRef); }
@@ -134,6 +135,11 @@ namespace MHServerEmu.Games.Entities
             return result;
         }
 
+        public override void SetEntityCollideBounds(ref Bounds bounds)
+        {
+            _entityCollideBounds = bounds;
+        }
+
         public override void OnPropertyChange(PropertyId id, PropertyValue newValue, PropertyValue oldValue, SetPropertyFlags flags)
         {
             base.OnPropertyChange(id, newValue, oldValue, flags);
@@ -149,10 +155,9 @@ namespace MHServerEmu.Games.Entities
 
         private void OnOutOfWorld()
         {
-            List<Power> powerList = ListPool<Power>.Instance.Get();
+            using var powerListHandle = ListPool<Power>.Instance.Get(out List<Power> powerList);
             GetMissilePowersWithActivationEvent(powerList, null, MissilePowerActivationEventType.OnOutOfWorld);
             ActivateMissilePowers(powerList, null, RegionLocation.Position);
-            ListPool<Power>.Instance.Return(powerList);
             Kill();
         }
 
@@ -168,10 +173,9 @@ namespace MHServerEmu.Games.Entities
             if (Game == null) return;
             if (IsInWorld)
             {
-                List<Power> powerList = ListPool<Power>.Instance.Get();
+                using var powerListHandle = ListPool<Power>.Instance.Get(out List<Power> powerList);
                 GetMissilePowersWithActivationEvent(powerList, null, MissilePowerActivationEventType.OnLifespanExpired);
                 ActivateMissilePowers(powerList, null, RegionLocation.Position);
-                ListPool<Power>.Instance.Return(powerList);
             }
             if (IsReturningMissile && IsSimulated)
                 ReturnMissile();
@@ -247,7 +251,7 @@ namespace MHServerEmu.Games.Entities
                 case LocomotorMethod.Ground:
                 case LocomotorMethod.Missile:
                     if (!Segment.IsNearZero(Properties[PropertyEnum.MissileBaseMoveSpeed]))
-                        locomotor.MoveForward(locomotionOptions);
+                        locomotor.MoveForward(ref locomotionOptions);
                     break;
 
                 case LocomotorMethod.MissileSeeking:
@@ -292,7 +296,7 @@ namespace MHServerEmu.Games.Entities
         private void InitializeEntityCollideBounds(MissileCreationContextPrototype creationContext)
         {
             float radius = creationContext.RadiusEffectOverride > 0 ? creationContext.RadiusEffectOverride : Bounds.GetRadius();
-            var location = RegionLocation;
+            ref RegionLocation location = ref RegionLocation;
             float height = Math.Max(radius, location.Position.Z - location.ProjectToFloor().Z);
             _entityCollideBounds.InitializeCapsule(radius, height, BoundsCollisionType.Overlapping, BoundsFlags.None);
         }
@@ -338,7 +342,7 @@ namespace MHServerEmu.Games.Entities
             }
 
             bool collideWithWhom = false;
-            List<Power> collisionPowers = ListPool<Power>.Instance.Get();
+            using var collisionPowersHandle = ListPool<Power>.Instance.Get(out List<Power> collisionPowers);
             GetCollisionPowers(collisionPowers, collidedWith);
 
             if (collisionPowers.Count > 0 || missileAlwaysCollides)
@@ -347,10 +351,7 @@ namespace MHServerEmu.Games.Entities
                 if (collidedWith != null)
                 {
                     if (CheckAndApplyMissileReflection(collidedWith, position))
-                    {
-                        ListPool<Power>.Instance.Return(collisionPowers);
                         return;
-                    }
 
                     OnValidTargetHit(collidedWith);
                 }
@@ -392,8 +393,6 @@ namespace MHServerEmu.Games.Entities
             }
 
             if (kill) Kill(collidedWith);
-
-            ListPool<Power>.Instance.Return(collisionPowers);
         }
 
         private bool OnCollideWithWorldGeometry()
@@ -432,7 +431,7 @@ namespace MHServerEmu.Games.Entities
                 if (_contextPrototype.OneShot == false)
                     locomotionOptions.Flags |= LocomotionFlags.LocomotionNoEntityCollide;
 
-                locomotor.FollowEntity(ownerId, 0f, locomotionOptions);
+                locomotor.FollowEntity(ownerId, 0f, ref locomotionOptions);
                 locomotor.FollowEntityMissingEvent.AddActionBack(ReturnTargetMissingAction);
             }
             else Kill();
@@ -742,10 +741,9 @@ namespace MHServerEmu.Games.Entities
             var gravitatedContext = GravitatedContext;
             if (gravitatedContext == null) return false;
 
-            List<Power> powerList = ListPool<Power>.Instance.Get();
+            using var powerListHandle = ListPool<Power>.Instance.Get(out List<Power> powerList);
             GetMissilePowersWithActivationEvent(powerList, null, MissilePowerActivationEventType.OnBounce);
             ActivateMissilePowers(powerList, null, position);
-            ListPool<Power>.Instance.Return(powerList);
 
             int numBounces = Properties[PropertyEnum.NumMissileBounces];
             if (++numBounces >= gravitatedContext.NumBounces)
@@ -781,8 +779,6 @@ namespace MHServerEmu.Games.Entities
                         FXRandomSeed = Properties[PropertyEnum.VariationSeed]
                     };
 
-                    // EntityHelper.CrateOrb(EntityHelper.TestOrb.Blue, RegionLocation.Position, Region);
-                    // EntityHelper.CrateOrb(EntityHelper.TestOrb.Red, position, Region);
                     ActivateMissilePower(power, ref powerSettings, target);
                 }
             }

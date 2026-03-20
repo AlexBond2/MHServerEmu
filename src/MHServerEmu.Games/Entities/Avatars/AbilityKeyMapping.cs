@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using MHServerEmu.Core.Collections;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Memory;
@@ -44,9 +45,9 @@ namespace MHServerEmu.Games.Entities.Avatars
         private PrototypeId _associatedTransformMode;
 
         // Assignable slots
-        private PrototypeId _primaryAction = PrototypeId.Invalid;
-        private PrototypeId _secondaryAction = PrototypeId.Invalid;
-        private PrototypeId[] _actionKeys = new PrototypeId[NumActionKeySlots];
+        private PrototypeId _primaryAction;
+        private PrototypeId _secondaryAction;
+        private InlineArray6<PrototypeId> _actionKeys;
 
         public int PowerSpecIndex { get => _powerSpecIndex; set => _powerSpecIndex = value; }
         public bool ShouldPersist { get => _shouldPersist; set => _shouldPersist = value; }
@@ -62,7 +63,7 @@ namespace MHServerEmu.Games.Entities.Avatars
             sb.AppendLine($"{nameof(_associatedTransformMode)}: {GameDatabase.GetPrototypeName(_associatedTransformMode)}");
             sb.AppendLine($"{nameof(_primaryAction)}: {GameDatabase.GetPrototypeName(_primaryAction)}");
             sb.AppendLine($"{nameof(_secondaryAction)}: {GameDatabase.GetPrototypeName(_secondaryAction)}");
-            for (int i = 0; i < _actionKeys.Length; i++)
+            for (int i = 0; i < NumActionKeySlots; i++)
                 sb.AppendLine($"{nameof(_actionKeys)}[{i}]: {GameDatabase.GetPrototypeName(_actionKeys[i])}");
             return sb.ToString();
         }
@@ -76,7 +77,7 @@ namespace MHServerEmu.Games.Entities.Avatars
             success &= Serializer.Transfer(archive, ref _associatedTransformMode);
             success &= Serializer.Transfer(archive, ref _primaryAction);
             success &= Serializer.Transfer(archive, ref _secondaryAction);
-            success &= Serializer.Transfer(archive, ref _actionKeys);
+            success &= Serializer.Transfer(archive, _actionKeys);
 
             return success;
         }
@@ -118,7 +119,7 @@ namespace MHServerEmu.Games.Entities.Avatars
 
             // TODO: DedicatedHealSlot, DedicatedPetTechSlot, DedicatedTeamUpSlot, DedicatedUltimateSlot
 
-            for (int i = 0; i < _actionKeys.Length; i++)
+            for (int i = 0; i < NumActionKeySlots; i++)
             {
                 if (_actionKeys[i] == abilityProtoRef)
                     abilitySlotList.Add(AbilitySlot.ActionKey0 + i);
@@ -217,17 +218,13 @@ namespace MHServerEmu.Games.Entities.Avatars
         /// </summary>
         public void SlotDefaultAbilities(Avatar avatar)
         {
-            AvatarPrototype avatarProto = avatar.AvatarPrototype;
-
-            List<HotkeyData> hotkeyDataList = ListPool<HotkeyData>.Instance.Get();
+            using var hotkeyDataListHandle = ListPool<HotkeyData>.Instance.Get(out List<HotkeyData> hotkeyDataList);
 
             if (GetDefaultAbilities(hotkeyDataList, avatar))
             {
                 foreach (HotkeyData hotkeyData in hotkeyDataList)
                     SetAbilityInAbilitySlot(hotkeyData.AbilityProtoRef, hotkeyData.AbilitySlot);
             }
-
-            ListPool<HotkeyData>.Instance.Return(hotkeyDataList);
         }
 
         public void SlotDefaultAbilitiesForTransformMode(TransformModePrototype transformModeProto)
@@ -272,7 +269,7 @@ namespace MHServerEmu.Games.Entities.Avatars
             AvatarPrototype avatarProto = avatar.AvatarPrototype;
             if (avatarProto == null) return Logger.WarnReturn(false, "GetDefaultAbilities(): avatarProto == null");
 
-            List<PowerProgressionEntryPrototype> powerProgEntryList = ListPool<PowerProgressionEntryPrototype>.Instance.Get();
+            using var powerProgEntryListHandle = ListPool<PowerProgressionEntryPrototype>.Instance.Get(out List<PowerProgressionEntryPrototype> powerProgEntryList);
             if (avatarProto.GetPowersUnlockedAtLevel(powerProgEntryList, avatar.CharacterLevel, true, startingLevel))
             {
                 foreach (PowerProgressionEntryPrototype powerProgEntry in powerProgEntryList)
@@ -320,7 +317,6 @@ namespace MHServerEmu.Games.Entities.Avatars
                 }
             }
 
-            ListPool<PowerProgressionEntryPrototype>.Instance.Return(powerProgEntryList);
             return hotkeyDataList.Count > 0;
         }
 

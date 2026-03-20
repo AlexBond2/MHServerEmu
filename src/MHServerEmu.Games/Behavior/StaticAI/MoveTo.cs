@@ -125,7 +125,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             blackboard.PropertyCollection[PropertyEnum.NavigationInfluenceBeforeMoving] = agent.HasNavigationInfluence;
             agent.DisableNavigationInfluence();
 
-            if (locomotor.FollowPath(cachedPath, locomotionOptions) == false) return;
+            if (locomotor.FollowPath(cachedPath, ref locomotionOptions) == false) return;
 
             if (moveToContext.MoveTo == MoveToType.Target 
                 || moveToContext.MoveTo == MoveToType.AssistedEntity
@@ -138,7 +138,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
                 {
                     float rangeStart = blackboard.PropertyCollection[PropertyEnum.AIMoveToPathingRangeStart];
                     float rangeEnd = blackboard.PropertyCollection[PropertyEnum.AIMoveToPathingRangeEnd];
-                    if (locomotor.FollowEntity(followEntity.Id, rangeStart, rangeEnd, locomotionOptions, false) == false)
+                    if (locomotor.FollowEntity(followEntity.Id, rangeStart, rangeEnd, ref locomotionOptions, false) == false)
                         return;
                 }
             }
@@ -207,7 +207,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
                             var locomotionOptions = new LocomotionOptions { RepathDelay = TimeSpan.FromMilliseconds(250) };
                             if (isWalking)
                                 locomotionOptions.Flags |= LocomotionFlags.IsWalking;
-                            locomotor.FollowEntity(followEntity.Id, boundsRange + halfRangeStart, boundsRange + halfRangeEnd, locomotionOptions, true);
+                            locomotor.FollowEntity(followEntity.Id, boundsRange + halfRangeStart, boundsRange + halfRangeEnd, ref locomotionOptions, true);
 
                             return StaticBehaviorReturnType.Running;
                         }
@@ -384,15 +384,15 @@ namespace MHServerEmu.Games.Behavior.StaticAI
 
             var checkFlags = PathFlags.Walk;
             var center = regionBounds.Center;
-            Bounds checkBounds = new(agent.Bounds);
+            Bounds checkBounds = agent.Bounds;     // copy
 
-            List<Vector3> sideList = ListPool<Vector3>.Instance.Get();
+            using var sideListHandle = ListPool<Vector3>.Instance.Get(out List<Vector3> sideList);
             Vector3 position;
 
             if (cellType.HasFlag(Cell.Type.N) || !wallsType.HasFlag(Cell.Walls.N) || wallsType == Cell.Walls.All)
             {
                 checkBounds.Center = new Vector3(regionBounds.Max.X + 256.0f, center.Y, center.Z);
-                if (region.ChoosePositionAtOrNearPoint(checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
+                if (region.ChoosePositionAtOrNearPoint(ref checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
                     && agent.CheckCanPathTo(position, checkFlags) == NaviPathResult.Success)
                     sideList.Add(position);
             }
@@ -400,7 +400,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             if (cellType.HasFlag(Cell.Type.S) || !wallsType.HasFlag(Cell.Walls.S) || wallsType == Cell.Walls.All)
             {
                 checkBounds.Center = new Vector3(regionBounds.Min.X - 256.0f, center.Y, center.Z);
-                if (region.ChoosePositionAtOrNearPoint(checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
+                if (region.ChoosePositionAtOrNearPoint(ref checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
                     && agent.CheckCanPathTo(position, checkFlags) == NaviPathResult.Success)
                     sideList.Add(position);
             }
@@ -408,7 +408,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             if (cellType.HasFlag(Cell.Type.E) || !wallsType.HasFlag(Cell.Walls.E) || wallsType == Cell.Walls.All)
             {
                 checkBounds.Center = new Vector3(center.X, regionBounds.Max.Y + 256.0f, center.Z);
-                if (region.ChoosePositionAtOrNearPoint(checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
+                if (region.ChoosePositionAtOrNearPoint(ref checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
                     && agent.CheckCanPathTo(position, checkFlags) == NaviPathResult.Success)
                     sideList.Add(position);
             }
@@ -416,7 +416,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             if (cellType.HasFlag(Cell.Type.W) || !wallsType.HasFlag(Cell.Walls.W) || wallsType == Cell.Walls.All)
             {
                 checkBounds.Center = new Vector3(center.X, regionBounds.Min.Y - 256.0f, center.Z);
-                if (region.ChoosePositionAtOrNearPoint(checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
+                if (region.ChoosePositionAtOrNearPoint(ref checkBounds, checkFlags, PositionCheckFlags.None, BlockingCheckFlags.None, 512.0f, out position)
                     && agent.CheckCanPathTo(position, checkFlags) == NaviPathResult.Success)
                     sideList.Add(position);
             }
@@ -433,8 +433,6 @@ namespace MHServerEmu.Games.Behavior.StaticAI
                     despawnPosition = sidePoint;
                 }
             }
-
-            ListPool<Vector3>.Instance.Return(sideList);
 
             return maxDistance != float.MinValue;
         }

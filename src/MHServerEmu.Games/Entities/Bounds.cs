@@ -86,7 +86,7 @@ namespace MHServerEmu.Games.Entities
         public BoundData() { }
     }
 
-    public class Bounds
+    public struct Bounds
     {
         public static readonly Logger Logger = LogManager.CreateLogger();
 
@@ -358,7 +358,8 @@ namespace MHServerEmu.Games.Entities
                         Vector3.Length(triangle[2] - Center));
                     return max;
                 case GeometryType.Wedge:
-                    Vector3[] wedgeVertices = GetWedgeVertices();
+                    Span<Vector3> wedgeVertices = stackalloc Vector3[4];
+                    GetWedgeVertices(wedgeVertices);
                     max = Math.Max(
                         Vector3.DistanceSquared2D(wedgeVertices[1], Center),
                         Vector3.DistanceSquared2D(wedgeVertices[2], Center));
@@ -389,7 +390,8 @@ namespace MHServerEmu.Games.Entities
                         Vector3.Length(triangle[1] - Center)),
                         Vector3.Length(triangle[2] - Center)); 
                 case GeometryType.Wedge:
-                    Vector3[] wedgeVertices = GetWedgeVertices();
+                    Span<Vector3> wedgeVertices = stackalloc Vector3[4];
+                    GetWedgeVertices(wedgeVertices);
                     Vector3 heightPoint = new(0.0f, 0.0f, _params.WedgeHalfHeight);
                     float max = Math.Max(
                         Vector3.DistanceSquared2D(wedgeVertices[1] + heightPoint, Center),
@@ -410,24 +412,18 @@ namespace MHServerEmu.Games.Entities
             };
         }
 
-        private Vector3[] GetWedgeVertices()
+        private bool GetWedgeVertices(Span<Vector3> wedgeVertices)
         {
             if (Geometry != GeometryType.Wedge)
-                return new Vector3[]
-                {
-                    Vector3.Zero,
-                    Vector3.Zero,
-                    Vector3.Zero,
-                    Vector3.Zero
-                };
+                return Logger.WarnReturn(false, "GetWedgeVertices(): Geometry != GeometryType.Wedge");
+
             Transform3 transform = Transform3.BuildTransform(Center, _orientation);
-            return new Vector3[]
-            {
-                new(transform * new Point3(_params.WedgeLength * -0.66666669f, _params.WedgeBaseWidth * -0.5f, 0.0f)),
-                new(transform * new Point3(_params.WedgeLength * -0.66666669f, _params.WedgeBaseWidth * 0.5f, 0.0f)),
-                new(transform * new Point3(_params.WedgeLength * 0.33333334f, _params.WedgeBase * 0.5f, 0.0f)),
-                new(transform * new Point3(_params.WedgeLength * 0.33333334f, _params.WedgeBase * -0.5f, 0.0f))
-            };
+            wedgeVertices[0] = new(transform * new Point3(_params.WedgeLength * -0.66666669f, _params.WedgeBaseWidth * -0.5f, 0.0f));
+            wedgeVertices[1] = new(transform * new Point3(_params.WedgeLength * -0.66666669f, _params.WedgeBaseWidth * 0.5f, 0.0f));
+            wedgeVertices[2] = new(transform * new Point3(_params.WedgeLength * 0.33333334f, _params.WedgeBase * 0.5f, 0.0f));
+            wedgeVertices[3] = new(transform * new Point3(_params.WedgeLength * 0.33333334f, _params.WedgeBase * -0.5f, 0.0f));
+
+            return true;
         }
 
         private Triangle ToTriangle2D()
@@ -495,7 +491,8 @@ namespace MHServerEmu.Games.Entities
                     return new(min, max);
 
                 case GeometryType.Wedge:
-                    var wedgeVertices = GetWedgeVertices();
+                    Span<Vector3> wedgeVertices = stackalloc Vector3[4];
+                    GetWedgeVertices(wedgeVertices);
                     min = new(
                         Math.Min(Math.Min(Math.Min(wedgeVertices[0].X, wedgeVertices[1].X), wedgeVertices[2].X), wedgeVertices[3].X),
                         Math.Min(Math.Min(Math.Min(wedgeVertices[0].Y, wedgeVertices[1].Y), wedgeVertices[2].Y), wedgeVertices[3].Y),
@@ -513,7 +510,7 @@ namespace MHServerEmu.Games.Entities
             }            
         }
 
-        public bool CanBeBlockedBy(Bounds entityBounds, bool selfBlocking = false, bool otherBlocking = false)
+        public bool CanBeBlockedBy(ref Bounds entityBounds, bool selfBlocking = false, bool otherBlocking = false)
         {
             return (CollisionType == BoundsCollisionType.Blocking || selfBlocking)
                 && (entityBounds.CollisionType == BoundsCollisionType.Blocking || otherBlocking);
@@ -534,7 +531,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Triangle:
                     return ToTriangle2D().Intersects(point);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(point) || triangles[1].Intersects(point);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -542,7 +540,7 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        public bool Intersects(Bounds other)
+        public bool Intersects(ref Bounds other)
         {
             switch (other.Geometry)
             {
@@ -557,7 +555,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Triangle:
                     return Intersects(other.ToTriangle2D());
                 case GeometryType.Wedge:
-                    Triangle[] triangles = other.GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    other.GetWedgeTriangles(triangles);
                     return Intersects(triangles[0]) || Intersects(triangles[1]);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}, other.Geometry={other.Geometry}");
@@ -576,7 +575,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: return ToSphere().Intersects(bounds);
                 case GeometryType.Triangle: return ToTriangle2D().Intersects(bounds);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(bounds) || triangles[1].Intersects(bounds);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -594,7 +594,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: return ToSphere().Intersects(bounds);
                 case GeometryType.Triangle: return ToTriangle2D().Intersects(bounds);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(bounds) || triangles[1].Intersects(bounds);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -612,7 +613,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: return ToSphere().Intersects(bounds);
                 case GeometryType.Triangle: return ToTriangle2D().Intersects(bounds);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(bounds) || triangles[1].Intersects(bounds);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -630,7 +632,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: return ToSphere().Intersects(bounds);
                 case GeometryType.Triangle: return ToTriangle2D().Intersects(bounds);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(bounds) || triangles[1].Intersects(bounds);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -648,7 +651,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: return ToSphere().Intersects(bounds);
                 case GeometryType.Triangle: return ToTriangle2D().Intersects(bounds);
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     return triangles[0].Intersects(bounds) || triangles[1].Intersects(bounds);
                 default:
                     Logger.Warn($"Unknown bounds geometry. Geometry={Geometry}");
@@ -656,21 +660,19 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        private Triangle[] GetWedgeTriangles()
+        private bool GetWedgeTriangles(Span<Triangle> triangles)
         {
             if (Geometry != GeometryType.Wedge)
-                return new Triangle[]
-                {
-                    Triangle.Zero,
-                    Triangle.Zero
-                };
+                return Logger.WarnReturn(false, "GetWedgeTriangles(): Geometry != GeometryType.Wedge");
 
-            Vector3[] wedgeVertices = GetWedgeVertices();
-            return new Triangle[]
-            {
-                new Triangle(wedgeVertices[0], wedgeVertices[1], wedgeVertices[2]),
-                new Triangle(wedgeVertices[2], wedgeVertices[3], wedgeVertices[0])
-            };
+            Span<Vector3> wedgeVertices = stackalloc Vector3[4];
+            if (GetWedgeVertices(wedgeVertices) == false)
+                return Logger.WarnReturn(false, "GetWedgeTriangles(): GetWedgeVertices(out InlineArray4<Vector3> wedgeVertices) == false");
+
+            triangles[0] = new Triangle(wedgeVertices[0], wedgeVertices[1], wedgeVertices[2]);
+            triangles[1] = new Triangle(wedgeVertices[2], wedgeVertices[3], wedgeVertices[0]);
+
+            return true;
         }
 
         public bool Intersects(Segment segment, ref float intersection)
@@ -731,7 +733,8 @@ namespace MHServerEmu.Games.Entities
                 case GeometryType.Sphere: sb.Append(ToSphere().ToString()); break;
                 case GeometryType.Triangle: sb.Append(ToTriangle2D().ToString()); break;
                 case GeometryType.Wedge:
-                    Triangle[] triangles = GetWedgeTriangles();
+                    Span<Triangle> triangles = stackalloc Triangle[2];
+                    GetWedgeTriangles(triangles);
                     sb.Append(triangles[0].ToString());
                     sb.AppendLine(triangles[1].ToString());
                     break;
@@ -739,7 +742,7 @@ namespace MHServerEmu.Games.Entities
             return sb.ToString();
         }
 
-        public bool Sweep(Bounds other, Vector3 otherVelocity, Vector3 velocity, ref float resultTime, ref Vector3? resultNormal)
+        public bool Sweep(ref Bounds other, Vector3 otherVelocity, Vector3 velocity, ref float resultTime, ref Vector3? resultNormal)
         {
             if (Geometry == GeometryType.Sphere && other.Geometry == GeometryType.Sphere)
             {
@@ -755,22 +758,22 @@ namespace MHServerEmu.Games.Entities
                 return result;
             }
             else if (Geometry == GeometryType.OBB && Vector3.IsNearZero(velocity))
-                return SweepVsStationaryOBB(other, otherVelocity, ToObb(), ref resultTime, resultNormal);
+                return SweepVsStationaryOBB(ref other, otherVelocity, ToObb(), ref resultTime, resultNormal);
             else if (other.Geometry == GeometryType.OBB && Vector3.IsNearZero(otherVelocity))
-                return SweepVsStationaryOBB(this, velocity, other.ToObb(), ref resultTime, resultNormal);
+                return SweepVsStationaryOBB(ref this, velocity, other.ToObb(), ref resultTime, resultNormal);
             else if (Geometry == GeometryType.AABB && Vector3.IsNearZero(velocity))
-                return SweepVsStationaryAABB(other, otherVelocity, ToAabb(), ref resultTime, resultNormal);
+                return SweepVsStationaryAABB(ref other, otherVelocity, ToAabb(), ref resultTime, resultNormal);
             else if (other.Geometry == GeometryType.AABB && Vector3.IsNearZero(otherVelocity))
-                return SweepVsStationaryAABB(this, velocity, other.ToAabb(), ref resultTime, resultNormal);
+                return SweepVsStationaryAABB(ref this, velocity, other.ToAabb(), ref resultTime, resultNormal);
             else if (Geometry == GeometryType.Triangle || other.Geometry == GeometryType.Triangle ||
                      Geometry == GeometryType.Wedge || other.Geometry == GeometryType.Wedge)
             {
-                Bounds bounds = new(this);
+                Bounds bounds = this;       // copy
                 bounds.Center += velocity;
-                Bounds otherBounds = new(other);
+                Bounds otherBounds = other; // copy
                 otherBounds.Center += otherVelocity;
 
-                if (bounds.Intersects(otherBounds))
+                if (bounds.Intersects(ref otherBounds))
                 {
                     resultTime = 1.0f;
                     if (resultNormal != null) resultNormal = Vector3.ZAxis;
@@ -781,7 +784,7 @@ namespace MHServerEmu.Games.Entities
             }
             else
             {
-                bool result = SweepAsCylinders(this, other, velocity, otherVelocity, ref resultTime);
+                bool result = SweepAsCylinders(ref this, ref other, velocity, otherVelocity, ref resultTime);
                 if (result && resultNormal != null)
                 {
                     Vector3 position = Center + velocity * resultTime;
@@ -792,7 +795,7 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        private static bool SweepAsCylinders(Bounds bounds, Bounds other, Vector3 velocity, Vector3 otherVelocity, ref float resultTime)
+        private static bool SweepAsCylinders(ref Bounds bounds, ref Bounds other, Vector3 velocity, Vector3 otherVelocity, ref float resultTime)
         {
             Sphere sphere = new (bounds.Center, bounds.Radius);
             Sphere otherSphere = new (other.Center, other.Radius);
@@ -813,7 +816,7 @@ namespace MHServerEmu.Games.Entities
             return false;
         }
 
-        private static bool SweepVsStationaryAABB(Bounds bounds, Vector3 velocity, in Aabb aabb, ref float resultTime, Vector3? resultNormal)
+        private static bool SweepVsStationaryAABB(ref Bounds bounds, Vector3 velocity, in Aabb aabb, ref float resultTime, Vector3? resultNormal)
         {
             switch (bounds.Geometry)
             {
@@ -841,7 +844,7 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        private static bool SweepVsStationaryOBB(Bounds bounds, Vector3 velocity, in Obb obb, ref float resultTime, Vector3? resultNormal)
+        private static bool SweepVsStationaryOBB(ref Bounds bounds, Vector3 velocity, in Obb obb, ref float resultTime, Vector3? resultNormal)
         {
             Aabb aabb = new (obb.Center - obb.Extents, obb.Center + obb.Extents);
 

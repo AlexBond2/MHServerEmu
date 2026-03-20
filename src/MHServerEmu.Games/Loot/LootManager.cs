@@ -90,7 +90,7 @@ namespace MHServerEmu.Games.Loot
                 inputSettings.EventType >= LootDropEventType.OnKilled &&
                 inputSettings.EventType <= LootDropEventType.OnKilledMiniBoss)
             {
-                List<MissionLootTable> missionLootTableList = ListPool<MissionLootTable>.Instance.Get();
+                using var missionLootTableListHandle = ListPool<MissionLootTable>.Instance.Get(out List<MissionLootTable> missionLootTableList);
 
                 if (MissionManager.GetMissionLootTablesForEnemy(inputSettings.SourceEntity, inputSettings.Player, missionLootTableList))
                 {
@@ -103,8 +103,6 @@ namespace MHServerEmu.Games.Loot
                     // We are not using these settings anymore, but let's clear the mission prototype ref just in case something changes
                     inputSettings.MissionProtoRef = PrototypeId.Invalid;
                 }
-
-                ListPool<MissionLootTable>.Instance.Return(missionLootTableList);
             }
         }
 
@@ -188,12 +186,11 @@ namespace MHServerEmu.Games.Loot
                 properties[PropertyEnum.MissionPrototype] = inputSettings.MissionProtoRef;
 
             // Determine drop source bounds
-            Bounds bounds = sourceEntity != null ? sourceEntity.Bounds : recipient.Bounds;
+            Bounds bounds = sourceEntity != null ? sourceEntity.Bounds : recipient.Bounds;  // copy
 
             // Override source bounds if needed
             if (inputSettings.PositionOverride != null)
             {
-                bounds = new(bounds);
                 bounds.Center = inputSettings.PositionOverride.Value;
                 sourceEntity = null;
             }
@@ -204,7 +201,7 @@ namespace MHServerEmu.Games.Loot
             _lootSpawnGrid.SetContext(region, sourcePosition, sourceEntity);
 
             Span<Vector3> dropPositions = stackalloc Vector3[lootResultSummary.NumDrops];
-            FindDropPositions(lootResultSummary, recipient, bounds, ref dropPositions, recipientId);
+            FindDropPositions(lootResultSummary, recipient, ref bounds, ref dropPositions, recipientId);
             int i = 0;
 
             // Spawn items
@@ -270,17 +267,16 @@ namespace MHServerEmu.Games.Loot
             return true;
         }
 
-        public bool GiveLootFromSummary(LootResultSummary lootResultSummary, Player player, PrototypeId inventoryProtoRef = PrototypeId.Invalid, bool isMissionLoot = false)
+        public bool GiveLootFromSummary(LootResultSummary lootResultSummary, Player player,
+            PrototypeId inventoryProtoRef = PrototypeId.Invalid, PrototypeId missionProtoRef = PrototypeId.Invalid)
         {
             LootType lootTypes = lootResultSummary.Types;
 
             if (lootTypes == LootType.None)
                 return true;
 
-            bool success = true;
-
             // Use a list to process ItemSpec + item CurrencySpec loot together
-            List<Item> itemList = ListPool<Item>.Instance.Get();
+            using var itemListHandle = ListPool<Item>.Instance.Get(out List<Item> itemList);
 
             // Reusable property collection for applying extra properties
             using PropertyCollection properties = ObjectPoolManager.Instance.Get<PropertyCollection>();
@@ -312,8 +308,7 @@ namespace MHServerEmu.Games.Loot
                         foreach (Item itemToDestroy in itemList)
                             itemToDestroy.Destroy();
 
-                        success = false;
-                        goto end;
+                        return false;
                     }
 
                     item.Properties[PropertyEnum.InventoryStackCount] = itemSpec.StackCount;
@@ -350,8 +345,7 @@ namespace MHServerEmu.Games.Loot
                             foreach (Item itemToDestroy in itemList)
                                 itemToDestroy.Destroy();
 
-                            success = false;
-                            goto end;
+                            return false;
                         }
 
                         item.Properties[PropertyEnum.InventoryStackCount] = itemSpec.StackCount;
@@ -379,8 +373,7 @@ namespace MHServerEmu.Games.Loot
                     foreach (Item itemToDestroy in itemList)
                         itemToDestroy.Destroy();
 
-                    success = false;
-                    goto end;
+                    return false;
                 }
             }
 
@@ -415,46 +408,63 @@ namespace MHServerEmu.Games.Loot
                     player.AwardVendorXP(vendorXPSummary.XPAmount, vendorXPSummary.VendorProtoRef);
             }
 
-            // Mission-exclusive rewards: experience, endurance / health bonuses, power points
-            if (isMissionLoot)
+            // Mission-exclusive rewards: experience, property bonuses, "real money" (G)
+            const LootType MissionLootTypes = LootType.Experience | LootType.HealthBonus | LootType.EnduranceBonus | LootType.PowerPoints | LootType.RealMoney;
+
+            if (missionProtoRef != PrototypeId.Invalid)
             {
-                if (lootTypes.HasFlag(LootType.Experience))
+                Avatar avatar = player.CurrentAvatar;
+
+                if (avatar != null)
                 {
-                    Avatar avatar = player.CurrentAvatar;
-                    avatar?.AwardXP(lootResultSummary.Experience, 0, false);
+                    if (lootTypes.HasFlag(LootType.Experience))
+                        avatar.AwardXP(lootResultSummary.Experience, 0, false);
+
+                    if ((lootTypes & (LootType.HealthBonus | LootType.EnduranceBonus | LootType.PowerPoints)) != 0)
+                    {
+                        // Property rewards should always be for the first completion only.
+                        if (MissionManager.HasReceivedRewardsForMission(player, avatar, missionProtoRef) == false)
+                        {
+                            if (lootTypes.HasFlag(LootType.HealthBonus))
+                            {
+                                if (avatar.AdjustMissionRewardProperty(PropertyEnum.HealthAddBonus, lootResultSummary.HealthBonus, missionProtoRef) == false)
+                                    Logger.Warn($"GiveLootFromSummary(): Failed to give HealthBonus reward to avatar [{avatar}]");
+                            }
+
+                            if (lootTypes.HasFlag(LootType.EnduranceBonus))
+                            {
+                                foreach (PrimaryResourceManaBehaviorPrototype primaryManaBehaviorProto in avatar.GetPrimaryResourceManaBehaviors())
+                                {
+                                    ManaType manaType = primaryManaBehaviorProto.ManaType;
+                                    if (avatar.AdjustMissionRewardProperty(new(PropertyEnum.EnduranceAddBonus, manaType), (float)lootResultSummary.EnduranceBonus, missionProtoRef) == false)
+                                        Logger.Warn($"GiveLootFromSummary(): Failed to give EnduranceBonus reward for mana type {manaType} to avatar [{avatar}]");
+                                }
+                            }
+
+                            if (lootTypes.HasFlag(LootType.PowerPoints))
+                            {
+                                if (avatar.AdjustMissionRewardProperty(PropertyEnum.AvatarPowerPointsBonus, lootResultSummary.PowerPoints, missionProtoRef) == false)
+                                    Logger.Warn($"GiveLootFromSummary(): Failed to give PowerPoints reward to avatar [{avatar}]");
+                            }
+                        }
+                        else
+                        {
+                            Logger.Warn($"GiveLootFromSummary(): Avatar [{avatar}] rolled property mission reward for non-first mission completion");
+                        }
+                    }
                 }
 
-                if (lootTypes.HasFlag(LootType.HealthBonus))
-                {
-                    // TODO for 1.48
-                    Logger.Warn("GiveLootFromSummary(): HealthBonus rewards are not yet implemented");
-                }
-
-                if (lootTypes.HasFlag(LootType.EnduranceBonus))
-                {
-                    // TODO for 1.48
-                    Logger.Warn("GiveLootFromSummary(): EnduranceBonus rewards are not yet implemented");
-                }
-
-                if (lootTypes.HasFlag(LootType.PowerPoints))
-                {
-                    // TODO for 1.48
-                    Logger.Warn("GiveLootFromSummary(): PowerPoints rewards are not yet implemented");
-                }
+                // This is used for the HiddenOneTimeGiveGs mission
+                if (lootTypes.HasFlag(LootType.RealMoney))
+                    player.AcquireGazillionite(lootResultSummary.RealMoney);
             }
             else
             {
-                if ((lootTypes & (LootType.Experience | LootType.HealthBonus | LootType.EnduranceBonus | LootType.PowerPoints)) != 0)
-                {
+                if ((lootTypes & (MissionLootTypes)) != 0)
                     Logger.Warn($"GiveLootFromSummary(): Mission-only loot types found in a non-mission summary, Types=[{lootResultSummary.Types}]");
-                }
             }
 
-            // NOTE: We use goto here because returning a list to the pool while it's
-            // being iterated will clear it and cause it to be modified during iteration.
-            end:
-            ListPool<Item>.Instance.Return(itemList);
-            return success;
+            return true;
         }
 
         public bool SpawnItem(PrototypeId itemProtoRef, LootContext lootContext, Player player, WorldEntity sourceEntity)
@@ -486,7 +496,15 @@ namespace MHServerEmu.Games.Loot
             LootResult lootResult = new(itemSpec);
             lootResultSummary.Add(lootResult);
 
-            return GiveLootFromSummary(lootResultSummary, player, PrototypeId.Invalid);
+            if (GiveLootFromSummary(lootResultSummary, player, PrototypeId.Invalid) == false)
+                return false;
+
+            Prototype itemProto = itemSpec.ItemProtoRef.As<ItemPrototype>();
+            Prototype rarityProto = itemSpec.RarityProtoRef.As<RarityPrototype>();
+            if (itemProto != null && rarityProto != null)
+                player.OnScoringEvent(new(Events.ScoringEventType.ItemCollected, itemProto, rarityProto, 1));
+
+            return true;
         }
 
         /// <summary>
@@ -601,7 +619,7 @@ namespace MHServerEmu.Games.Loot
             if (region == null) return Logger.WarnReturn(false, "SpawnAgentForPlayer(): region == null");
 
             _lootSpawnGrid.SetContext(region, avatar.RegionLocation.Position, null);
-            Vector3 dropPosition = FindDropPosition(agentProto, avatar, avatar.Bounds, 1);
+            Vector3 dropPosition = FindDropPosition(agentProto, avatar, ref avatar.Bounds, 1);
 
             return SpawnAgentInternal(agentSpec, player, region.Id, dropPosition, avatar.Id, avatar.RegionLocation.Position, agentProperties);
         }
@@ -659,35 +677,35 @@ namespace MHServerEmu.Games.Loot
 
         #region Drop Positioning
 
-        private void FindDropPositions(LootResultSummary lootResultSummary, WorldEntity recipient, Bounds bounds, ref Span<Vector3> dropPositions, int recipientId)
+        private void FindDropPositions(LootResultSummary lootResultSummary, WorldEntity recipient, ref Bounds bounds, ref Span<Vector3> dropPositions, int recipientId)
         {
             // Find drop positions for each item
             int i = 0;
 
             // NOTE: The order here has to be the same as SpawnLootFromSummary()
             foreach (ItemSpec itemSpec in lootResultSummary.ItemSpecs)
-                dropPositions[i++] = FindDropPosition(itemSpec, recipient, bounds, recipientId);
+                dropPositions[i++] = FindDropPosition(itemSpec, recipient, ref bounds, recipientId);
 
             foreach (AgentSpec agentSpec in lootResultSummary.AgentSpecs)
-                dropPositions[i++] = FindDropPosition(agentSpec, recipient, bounds, recipientId);
+                dropPositions[i++] = FindDropPosition(agentSpec, recipient, ref bounds, recipientId);
 
             foreach (int credits in lootResultSummary.Credits)
-                dropPositions[i++] = FindDropPosition(_creditsItemProto, recipient, bounds, recipientId);
+                dropPositions[i++] = FindDropPosition(_creditsItemProto, recipient, ref bounds, recipientId);
 
             foreach (CurrencySpec currencySpec in lootResultSummary.Currencies)
-                dropPositions[i++] = FindDropPosition(currencySpec, recipient, bounds, recipientId);
+                dropPositions[i++] = FindDropPosition(currencySpec, recipient, ref bounds, recipientId);
         }
 
-        private Vector3 FindDropPosition(ItemSpec itemSpec, WorldEntity recipient, Bounds bounds, int recipientId)
+        private Vector3 FindDropPosition(ItemSpec itemSpec, WorldEntity recipient, ref Bounds bounds, int recipientId)
         {
             ItemPrototype itemProto = itemSpec.ItemProtoRef.As<ItemPrototype>();
             if (itemProto == null)
                 return Logger.WarnReturn(bounds.Center, "FindDropPosition(): itemProto == null");
 
-            return FindDropPosition(itemProto, recipient, bounds, recipientId);
+            return FindDropPosition(itemProto, recipient, ref bounds, recipientId);
         }
 
-        private Vector3 FindDropPosition(in AgentSpec agentSpec, WorldEntity recipient, Bounds bounds, int recipientId)
+        private Vector3 FindDropPosition(in AgentSpec agentSpec, WorldEntity recipient, ref Bounds bounds, int recipientId)
         {
             // NOTE: Some loot tables (e.g. InanimateObjectsCh03GarbageBags) spawn destructible props. They are not agents,
             // but they still go through here, which means we have to use WorldEntityPrototype instead of AgentPrototype.
@@ -695,19 +713,19 @@ namespace MHServerEmu.Games.Loot
             if (agentProto == null)
                 return Logger.WarnReturn(bounds.Center, $"FindDropPosition(): Failed to retrieve prototype for AgentSpec [{agentSpec}]");
 
-            return FindDropPosition(agentProto, recipient, bounds, recipientId);
+            return FindDropPosition(agentProto, recipient, ref bounds, recipientId);
         }
 
-        private Vector3 FindDropPosition(in CurrencySpec currencySpec, WorldEntity recipient, Bounds bounds, int recipientId)
+        private Vector3 FindDropPosition(in CurrencySpec currencySpec, WorldEntity recipient, ref Bounds bounds, int recipientId)
         {
             WorldEntityPrototype worldEntityProto = currencySpec.AgentOrItemProtoRef.As<WorldEntityPrototype>();
             if (worldEntityProto == null)
                 return Logger.WarnReturn(bounds.Center, "FindDropPosition(): worldEntityProto == null");
 
-            return FindDropPosition(worldEntityProto, recipient, bounds, recipientId);
+            return FindDropPosition(worldEntityProto, recipient, ref bounds, recipientId);
         }
 
-        private Vector3 FindDropPosition(WorldEntityPrototype dropEntityProto, WorldEntity recipient, Bounds bounds, int recipientId)
+        private Vector3 FindDropPosition(WorldEntityPrototype dropEntityProto, WorldEntity recipient, ref Bounds bounds, int recipientId)
         {
             // Fall back to the center of provided bounds if something goes wrong
             Vector3 sourcePosition = bounds.Center;

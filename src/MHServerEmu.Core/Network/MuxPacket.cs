@@ -3,6 +3,7 @@ using System.Collections;
 using Google.ProtocolBuffers;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
+using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Network.Tcp;
 
 namespace MHServerEmu.Core.Network
@@ -13,6 +14,9 @@ namespace MHServerEmu.Core.Network
     public readonly struct MuxPacket : IPacket
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
+
+        // Packets apparently go as high as 2800+ messages based on logs, so we presize pooled lists to 4096 to fit that and extra.
+        private static readonly ConcurrentPool<List<MessagePackageOut>> MessageListPool = new(4096, static () => new(4096));
         private static readonly ArrayPool<byte> BufferPool = ArrayPool<byte>.Create();
 
         private readonly List<MessagePackageOut> _outboundMessageList = null;
@@ -39,7 +43,16 @@ namespace MHServerEmu.Core.Network
             Command = command;
 
             if (IsDataPacket)
-                _outboundMessageList = new();
+                _outboundMessageList = MessageListPool.Get();
+        }
+
+        public void Dispose()
+        {
+            if (IsDataPacket)
+            {
+                _outboundMessageList.Clear();
+                MessageListPool.Return(_outboundMessageList);
+            }
         }
 
         /// <summary>
@@ -62,8 +75,6 @@ namespace MHServerEmu.Core.Network
         {
             if (IsDataPacket == false)
                 return Logger.WarnReturn(false, "AddMessages(): Attempted to add messages to a non-data packet");
-
-            _outboundMessageList.EnsureCapacity(_outboundMessageList.Count + messageList.Count);
 
             foreach (IMessage message in messageList)
             {

@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Runtime.CompilerServices;
+using System.Text;
 using MHServerEmu.Core.Collections;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Memory;
@@ -112,6 +113,8 @@ namespace MHServerEmu.Games.Entities
         private readonly EventPointer<ScheduledLifespanEvent> _scheduledLifespanEvent = new();
         private readonly EventPointer<ScheduledDestroyEvent> _scheduledDestroyEvent = new();
 
+        private InventoryLocation _inventoryLocation = InventoryLocation.Invalid;
+
         private EntityFlags _flags;
 
         private List<AttachedPropertiesEntry> _attachedProperties;
@@ -141,8 +144,8 @@ namespace MHServerEmu.Games.Entities
         public bool CanSendArchiveMessages { get => IsInGame; }
 
         public InventoryCollection InventoryCollection { get; } = new();
-        public InventoryLocation InventoryLocation { get; private set; } = new();
-        public ulong OwnerId { get => InventoryLocation.ContainerId; }
+        public ref InventoryLocation InventoryLocation { get => ref _inventoryLocation; }
+        public ulong OwnerId { get => _inventoryLocation.ContainerId; }
         public bool IsRootOwner { get => OwnerId == 0; }
         public virtual bool IsWakingUp { get => false; }
         public TimeSpan TotalLifespan { get; private set; }
@@ -510,15 +513,15 @@ namespace MHServerEmu.Games.Entities
         {
         }
 
-        public virtual void OnSelfRemovedFromOtherInventory(InventoryLocation prevInvLoc)
+        public virtual void OnSelfRemovedFromOtherInventory(ref InventoryLocation prevInvLoc)
         {
         }
 
-        public virtual void OnOtherEntityAddedToMyInventory(Entity entity, InventoryLocation invLoc, bool unpackedArchivedEntity)
+        public virtual void OnOtherEntityAddedToMyInventory(Entity entity, ref InventoryLocation invLoc, bool unpackedArchivedEntity)
         {
         }
 
-        public virtual void OnOtherEntityRemovedFromMyInventory(Entity entity, InventoryLocation invLoc)
+        public virtual void OnOtherEntityRemovedFromMyInventory(Entity entity, ref InventoryLocation invLoc)
         {
         }
 
@@ -901,7 +904,7 @@ namespace MHServerEmu.Games.Entities
 
             Power.CopyPowerIndexProperties(indexProperties, modProperties);
 
-            List<PrototypeId> procPowerRefList = ListPool<PrototypeId>.Instance.Get();
+            using var procPowerRefListHandle = ListPool<PrototypeId>.Instance.Get(out List<PrototypeId> procPowerRefList);
             foreach (var kvp in modProperties.IteratePropertyRange(Property.ProcPropertyTypesAll))
             {
                 Property.FromParam(kvp.Key, 1, out PrototypeId procPowerRef);
@@ -910,8 +913,6 @@ namespace MHServerEmu.Games.Entities
 
             foreach (PrototypeId procPowerRef in procPowerRefList)
                 modProperties[PropertyEnum.ProcPowerRank, procPowerRef] = rank;
-
-            ListPool<PrototypeId>.Instance.Return(procPowerRefList);
 
             OnAttachedPropertiesPreAdd(modProperties);
             Properties.AddChildCollection(modProperties);
@@ -994,7 +995,7 @@ namespace MHServerEmu.Games.Entities
 
         #region Inventory Management
 
-        public RegionLocation GetOwnerLocation()
+        public ref RegionLocation GetOwnerLocation(out bool found)
         {
             Entity owner = GetOwner();
             while (owner != null)
@@ -1002,22 +1003,26 @@ namespace MHServerEmu.Games.Entities
                 if (owner is WorldEntity worldEntity)
                 {
                     if (worldEntity.IsInWorld)
-                        return worldEntity.RegionLocation;
-                }
-                else
-                {
-                    if (owner is Player player)
                     {
-                        Avatar avatar = player.CurrentAvatar;
-                        if (avatar != null && avatar.IsInWorld)
-                            return avatar.RegionLocation;
+                        found = true;
+                        return ref worldEntity.RegionLocation;
+                    }
+                }
+                else if (owner is Player player)
+                {
+                    Avatar avatar = player.CurrentAvatar;
+                    if (avatar != null && avatar.IsInWorld)
+                    {
+                        found = true;
+                        return ref avatar.RegionLocation;
                     }
                 }
 
                 owner = owner.GetOwner();
             }
 
-            return null;
+            found = false;
+            return ref Unsafe.NullRef<RegionLocation>();
         }
 
         public Entity GetOwner()
@@ -1127,9 +1132,9 @@ namespace MHServerEmu.Games.Entities
 
         public Inventory GetOwnerInventory()
         {
-            Entity container = Game.EntityManager.GetEntity<Entity>(InventoryLocation.ContainerId);
+            Entity container = Game.EntityManager.GetEntity<Entity>(_inventoryLocation.ContainerId);
             if (container == null) return null;
-            return container.GetInventoryByRef(InventoryLocation.InventoryRef);
+            return container.GetInventoryByRef(_inventoryLocation.InventoryRef);
         }
 
         public InventoryResult CanChangeInventoryLocation(Inventory destInventory)

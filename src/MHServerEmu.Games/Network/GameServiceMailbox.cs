@@ -73,6 +73,18 @@ namespace MHServerEmu.Games.Network
                     OnPartyMemberInfoServerUpdate(partyMemberInfoServerUpdate);
                     break;
 
+                case ServiceMessage.PartyKickGracePeriod partyKickGracePeriod:
+                    OnPartyKickGracePeriod(partyKickGracePeriod);
+                    break;
+
+                case ServiceMessage.GuildMessageToServer guildMessageToServer:
+                    OnGuildMessageToServer(guildMessageToServer);
+                    break;
+
+                case ServiceMessage.GuildMessageToClient guildMessageToClient:
+                    OnGuildMessageToClient(guildMessageToClient);
+                    break;
+
                 case ServiceMessage.MatchQueueUpdate matchQueueUpdate:
                     OnMatchQueueUpdate(matchQueueUpdate);
                     break;
@@ -231,6 +243,33 @@ namespace MHServerEmu.Games.Network
             PartyMemberInfo memberInfo = partyMemberInfoServerUpdate.MemberInfo;
 
             Game.PartyManager.OnPartyMemberInfoServerUpdate(playerDbId, groupId, memberDbId, memberEvent, memberInfo);
+        }
+
+        private void OnPartyKickGracePeriod(in ServiceMessage.PartyKickGracePeriod partyKickGracePeriod)
+        {
+            Player player = Game.EntityManager.GetEntityByDbGuid<Player>(partyKickGracePeriod.PlayerDbId);
+            player?.SendMessage(NetMessagePartyKickGracePeriod.CreateBuilder()
+                .SetExpireTimeMicroseconds(partyKickGracePeriod.ExpireTimeMicroseconds)
+                .SetLeaveReason(partyKickGracePeriod.LeaveReason)
+                .Build());
+        }
+
+        private void OnGuildMessageToServer(in ServiceMessage.GuildMessageToServer guildMessageToServer)
+        {
+            Game.GuildManager.OnGuildMessage(guildMessageToServer.Messages);
+        }
+
+        private void OnGuildMessageToClient(in ServiceMessage.GuildMessageToClient guildMessageToClient)
+        {
+            Player player = Game.EntityManager.GetEntityByDbGuid<Player>(guildMessageToClient.PlayerDbId);
+            if (player == null)
+                return;
+
+            NetMessageGuildMessageToClient clientMessage = NetMessageGuildMessageToClient.CreateBuilder()
+                .SetMessages(guildMessageToClient.Messages)
+                .Build();
+
+            player.SendMessage(clientMessage);
         }
 
         private void OnMatchQueueUpdate(in ServiceMessage.MatchQueueUpdate matchQueueUpdate)

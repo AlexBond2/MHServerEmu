@@ -1,6 +1,6 @@
 # Server Commands
 
-This list was automatically generated on `2025.11.12 14:50:01 UTC` using server version `0.8.0`.
+This list was automatically generated on `2026.03.09 15:06:03 UTC` using server version `1.0.0`.
 
 To see an up to date list of all commands, type !commands in the server console or the in-game chat. When invoking a command from in-game your account has to meet the user level requirement for the command.
 
@@ -24,9 +24,10 @@ Account management commands.
 ## Achievement
 Commands related to the achievement system.
 
-| Command                | Description                                 | User Level | Invoker Type  |
-| ---------------------- | ------------------------------------------- | ---------- | ------------  |
-| !achievement info [id] | Outputs info for the specified achievement. | Admin      | Any           |
+| Command                | Description                                             | User Level | Invoker Type  |
+| ---------------------- | ------------------------------------------------------- | ---------- | ------------  |
+| !achievement info [id] | Outputs info for the specified achievement.             | Admin      | Any           |
+| !achievement localeid  | Generates a LocaleStringId from the specified argument. | Admin      | Any           |
 
 ## AOI
 Commands for interacting with the invoker player's area of interest (AOI).
@@ -107,7 +108,7 @@ Commands for managing items.
 | Command                      | Description                                                                | User Level | Invoker Type  |
 | ---------------------------- | -------------------------------------------------------------------------- | ---------- | ------------  |
 | !item cleardeliverybox       | Destroys all items contained in the delivery box inventory.                | Any        | Client        |
-| !item creditchest            | Converts 500k credits to a sellable chest item.                            | Any        | Client        |
+| !item creditchest            | Converts credits to a sellable chest item.                                 | Any        | Client        |
 | !item destroyindestructible  | Destroys indestructible items contained in the player's general inventory. | Any        | Client        |
 | !item drop [pattern] [count] | Creates and drops the specified item from the current avatar.              | Admin      | Client        |
 | !item give [pattern] [count] | Creates and gives the specified item to the current player.                | Admin      | Client        |
@@ -210,15 +211,16 @@ Region management commands.
 ## Server
 Server management commands.
 
-| Command                  | Description                               | User Level | Invoker Type   |
-| ------------------------ | ----------------------------------------- | ---------- | -------------  |
-| !server broadcast        | Broadcasts a notification to all players. | Admin      | Any            |
-| !server reloadaddg       | Reloads the Add G page.                   | Admin      | ServerConsole  |
-| !server reloadcatalog    | Reloads MTX store catalog.                | Admin      | ServerConsole  |
-| !server reloaddashboard  | Reloads the web dashboard.                | Admin      | ServerConsole  |
-| !server reloadlivetuning | Reloads live tuning settings.             | Admin      | ServerConsole  |
-| !server shutdown         | Shuts the server down.                    | Admin      | Any            |
-| !server status           | Prints server status.                     | Any        | Any            |
+| Command                           | Description                               | User Level | Invoker Type   |
+| --------------------------------- | ----------------------------------------- | ---------- | -------------  |
+| !server broadcast                 | Broadcasts a notification to all players. | Admin      | Any            |
+| !server reloadaddg                | Reloads the Add G page.                   | Admin      | ServerConsole  |
+| !server reloadcatalog             | Reloads MTX store catalog.                | Admin      | ServerConsole  |
+| !server reloaddashboard           | Reloads the web dashboard.                | Admin      | ServerConsole  |
+| !server reloadlivetuning          | Reloads live tuning settings.             | Admin      | ServerConsole  |
+| !server reloadplayernameblacklist | Reloads the player name blacklist.        | Admin      | ServerConsole  |
+| !server shutdown                  | Shuts the server down.                    | Admin      | Any            |
+| !server status                    | Prints server status.                     | Any        | Any            |
 
 ## Store
 Commands for interacting with the in-game store.
@@ -228,6 +230,14 @@ Commands for interacting with the in-game store.
 | !store addg [amount]      | Adds the specified number of Gs to this account.                                                                         | Admin      | Client        |
 | !store convertes [amount] | Converts Eternity Splinters to the equivalent amount of Gs. Defaults to 100 Eternity Splinters if no value is specified. | Any        | Client        |
 
+## UltimatePrestige
+Ultimate Prestige system commands.
+
+| Command                    | Description                                           | User Level | Invoker Type  |
+| -------------------------- | ----------------------------------------------------- | ---------- | ------------  |
+| !ultimateprestige activate | Activates the Ultimate Prestige for the current hero. | Any        | Client        |
+| !ultimateprestige level    | Prints the current Ultimate Prestige level.           | Any        | Client        |
+
 ## Unlock
 Commands for unlocking various things.
 
@@ -235,6 +245,14 @@ Commands for unlocking various things.
 | ----------------- | ---------------------- | ---------- | ------------  |
 | !unlock chapters  | Unlocks all chapters.  | Admin      | Client        |
 | !unlock waypoints | Unlocks all waypoints. | Admin      | Client        |
+
+## WebApi
+Web API management commands.
+
+| Command             | Description                  | User Level | Invoker Type   |
+| ------------------- | ---------------------------- | ---------- | -------------  |
+| !webapi generatekey | Generates a new web API key. | Admin      | ServerConsole  |
+| !webapi reloadkeys  | Reloads web API keys         | Admin      | ServerConsole  |
 
 ## Misc
 

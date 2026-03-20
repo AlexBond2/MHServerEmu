@@ -58,12 +58,12 @@ namespace MHServerEmu.Games.Loot
             // Construct a new loot grid for the current context
             Array.Clear(_cells);
 
-            List<WorldEntity> entityList = ListPool<WorldEntity>.Instance.Get();
+            using var entityListHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> entityList);
             _context.Region.GetEntitiesInVolume(entityList, new Sphere(_context.Position, MaxSpiralRadius), new());
 
             foreach (WorldEntity entity in entityList)
             {
-                Bounds bounds = entity.Bounds;
+                ref Bounds bounds = ref entity.Bounds;
                 BoundsPrototype boundsProto = entity.WorldEntityPrototype?.Bounds;
 
                 // Skip entities that can't block loot
@@ -115,7 +115,6 @@ namespace MHServerEmu.Games.Loot
                 }
             }
 
-            ListPool<WorldEntity>.Instance.Return(entityList);
             return true;
         }
 

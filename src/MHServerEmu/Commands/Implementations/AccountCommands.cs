@@ -21,7 +21,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(3)]
         public string Create(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             string playerName = @params[1];
             string password = @params[2];
 
@@ -41,7 +41,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(2)]
         public string PlayerName(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             string playerName = @params[1];
 
             DBAccount account = CommandHelper.GetClientAccount(client);
@@ -65,7 +65,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(2)]
         public string Password(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             string password = @params[1];
 
             DBAccount account = CommandHelper.GetClientAccount(client);
@@ -90,12 +90,21 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(2)]
         public string UserLevel(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
+            string userLevelString = @params[1];
 
-            if (uint.TryParse(@params[1], out uint userLevelValue) == false)
-                return "Failed to parse user level.";
+            AccountUserLevel userLevel;
 
-            AccountUserLevel userLevel = (AccountUserLevel)userLevelValue;
+            if (uint.TryParse(userLevelString, out uint userLevelValue))
+            {
+                userLevel = (AccountUserLevel)userLevelValue;
+            }
+            else
+            {
+                // Fall back to name parsing if the provided param is not a number.
+                if (Enum.TryParse(userLevelString, true, out userLevel) == false)
+                    return "Failed to parse user level.";
+            }
 
             if (userLevel > AccountUserLevel.Admin)
                 return "Invalid arguments. Type 'help account userlevel' to get help.";
@@ -117,7 +126,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(2)]
         public string Verify(string[] @params, NetClient client)
         {
-            var loginDataPB = LoginDataPB.CreateBuilder().SetEmailAddress(@params[0].ToLower()).SetPassword(@params[1]).Build();
+            var loginDataPB = LoginDataPB.CreateBuilder().SetEmailAddress(@params[0]).SetPassword(@params[1]).Build();
             AuthStatusCode statusCode = AccountManager.TryGetAccountByLoginDataPB(loginDataPB, false, out _);
 
             if (statusCode == AuthStatusCode.Success)
@@ -133,7 +142,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(1)]
         public string Ban(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             return SetAccountFlag(email, AccountFlags.IsBanned);
         }
 
@@ -144,7 +153,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(1)]
         public string Unban(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             return ClearAccountFlag(email, AccountFlags.IsBanned);
         }
 
@@ -155,7 +164,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(1)]
         public string Whitelist(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             return SetAccountFlag(email, AccountFlags.IsWhitelisted);
         }
 
@@ -166,7 +175,7 @@ namespace MHServerEmu.Commands.Implementations
         [CommandParamCount(1)]
         public string Unwhitelist(string[] @params, NetClient client)
         {
-            string email = @params[0].ToLower();
+            string email = @params[0];
             return ClearAccountFlag(email, AccountFlags.IsWhitelisted);
         }
 

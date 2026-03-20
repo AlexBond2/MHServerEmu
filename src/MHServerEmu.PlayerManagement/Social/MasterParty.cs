@@ -95,6 +95,7 @@ namespace MHServerEmu.PlayerManagement.Social
 
                 _members.Add(player);
                 player.CurrentParty = this;
+                player.AddToChatRoom(ChatRoomTypes.CHAT_ROOM_TYPE_PARTY, Id);
 
                 WorldView.AddOwner(player);
 
@@ -108,7 +109,7 @@ namespace MHServerEmu.PlayerManagement.Social
             return added;
         }
 
-        public bool RemoveMember(PlayerHandle player, GroupLeaveReason reason)
+        public bool RemoveMember(PlayerHandle player, GroupLeaveReason leaveReason)
         {
             if (player == null) return Logger.WarnReturn(false, "RemoveMember(): player == null");
 
@@ -119,35 +120,37 @@ namespace MHServerEmu.PlayerManagement.Social
                 return false;
 
             player.CurrentParty = null;
+            player.RemoveFromChatRoom(ChatRoomTypes.CHAT_ROOM_TYPE_PARTY, Id);
 
             WorldView.RemoveOwner(player);
 
             // Remove access to private regions of this party from the leaving member
+            WorldView removedMemberWorldView = player.WorldView;
+
             foreach (RegionHandle region in WorldView)
             {
                 if (region.IsPrivate)
-                    player.WorldView.RemoveRegion(region);
+                    removedMemberWorldView.RemoveRegion(region);
             }
 
-            // TODO: Grace period
-            // - Set up a timer in the player manager.
-            // - Relay timer information to the game instance to send NetMessagePartyKickGracePeriod to the player.
-            // - Kick the player from the region when the timer expires.
+            // Handle the region the removed player is currently in
+            RegionHandle removedMemberRegion = player.TargetRegion;
 
-            // Grant ownership of the current region to the last remaining party member.
-            if (_members.Count == 0)
+            if (removedMemberRegion != null)
             {
-                RegionHandle lastMemberRegion = player.TargetRegion;
-                WorldView lastMemberWorldView = player.WorldView;
-
-                if (lastMemberRegion != null && WorldView.ContainsRegion(lastMemberRegion.Id))
+                // Grant ownership of the current region to the last remaining party member.
+                if (_members.Count == 0 && WorldView.ContainsRegion(removedMemberRegion.Id))
                 {
-                    RegionHandle existingRegion = lastMemberWorldView.GetMatchingRegion(lastMemberRegion.RegionProtoRef, lastMemberRegion.CreateParams);
-                    if (existingRegion != null && existingRegion != lastMemberRegion)
-                        lastMemberWorldView.RemoveRegion(existingRegion);
+                    RegionHandle existingRegion = removedMemberWorldView.GetMatchingRegion(removedMemberRegion.RegionProtoRef, removedMemberRegion.CreateParams);
+                    if (existingRegion != null && existingRegion != removedMemberRegion)
+                        removedMemberWorldView.RemoveRegion(existingRegion);
 
-                    lastMemberWorldView.AddRegion(lastMemberRegion);
+                    removedMemberWorldView.AddRegion(removedMemberRegion);
                 }
+
+                // Set up a grace period to delay removal from the current region if it still belong to the party.
+                if (removedMemberWorldView.ContainsRegion(removedMemberRegion.Id) == false)
+                    player.SetGracePeriodRegion(removedMemberRegion, leaveReason);
             }
 
             Logger.Info($"RemoveMember(): party=[{this}], player=[{player}]");
@@ -259,10 +262,9 @@ namespace MHServerEmu.PlayerManagement.Social
 
         public void SyncPartyInfo(PlayerHandle player)
         {
-            List<PlayerHandle> recipients = ListPool<PlayerHandle>.Instance.Get();
+            using var recipientsHandle = ListPool<PlayerHandle>.Instance.Get(out List<PlayerHandle> recipients);
             recipients.Add(player);
             SendPartyInfo(true, recipients);
-            ListPool<PlayerHandle>.Instance.Return(recipients);
         }
 
         private void SendPartyInfo(bool includeMemberInfo, List<PlayerHandle> recipients)

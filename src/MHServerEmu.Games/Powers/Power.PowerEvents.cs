@@ -578,11 +578,11 @@ namespace MHServerEmu.Games.Powers
                         settings.UserPosition = settings.TargetPosition;
 
                     // Do a sweep
-                    RegionLocation sweepLocation = new(agentOwner.RegionLocation);
+                    RegionLocation sweepLocation = agentOwner.RegionLocation;   // copy
                     sweepLocation.SetPosition(settings.UserPosition);
 
                     Vector3? sweepPosition = settings.TargetPosition;
-                    PowerPositionSweep(sweepLocation, settings.TargetPosition, settings.TargetEntityId, ref sweepPosition);
+                    PowerPositionSweep(ref sweepLocation, settings.TargetPosition, settings.TargetEntityId, ref sweepPosition);
                     settings.TargetPosition = sweepPosition.Value;
                 }
 
@@ -821,7 +821,7 @@ namespace MHServerEmu.Games.Powers
             if (delta == 0)
                 return false;
 
-            List<Power> powersToOperateOnList = ListPool<Power>.Instance.Get();
+            using var powersToOperateOnListHandle = ListPool<Power>.Instance.Get(out List<Power> powersToOperateOnList);
             if (GetPowersToOperateOnForPowerEvent(ultimateOwner, triggeredPowerEvent, ref settings, powersToOperateOnList))
             {
                 foreach (Power power in powersToOperateOnList)
@@ -853,7 +853,6 @@ namespace MHServerEmu.Games.Powers
                 }
             }
 
-            ListPool<Power>.Instance.Return(powersToOperateOnList);
             return true;
         }
 
@@ -989,52 +988,42 @@ namespace MHServerEmu.Games.Powers
 
             Avatar avatar = Owner as Avatar;
 
-            HashSet<Player> recipientPlayers = HashSetPool<Player>.Instance.Get();
-            List<(PrototypeId, LootActionType)> tables = ListPool<(PrototypeId, LootActionType)>.Instance.Get();
+            using var recipientPlayersHandle = HashSetPool<Player>.Instance.Get(out HashSet<Player> recipientPlayers);
+            using var tablesHandle = ListPool<(PrototypeId, LootActionType)>.Instance.Get(out List<(PrototypeId, LootActionType)> tables);
 
-            try
+            if (lootTableContext.IncludeNearbyAvatars)
             {
-                if (lootTableContext.IncludeNearbyAvatars)
-                {
-                    List<Player> nearbyPlayerList = ListPool<Player>.Instance.Get();
+                using var nearbyPlayerListHandle = ListPool<Player>.Instance.Get(out List<Player> nearbyPlayerList);
 
-                    bool requireCombatActive = Owner.WorldEntityPrototype.RequireCombatActiveForKillCredit;
-                    ComputeNearbyPlayers(Owner.Region, Owner.RegionLocation.Position, 0, requireCombatActive, nearbyPlayerList);
+                bool requireCombatActive = Owner.WorldEntityPrototype.RequireCombatActiveForKillCredit;
+                ComputeNearbyPlayers(Owner.Region, Owner.RegionLocation.Position, 0, requireCombatActive, nearbyPlayerList);
 
-                    foreach (Player player in nearbyPlayerList)
-                        recipientPlayers.Add(player);
-
-                    ListPool<Player>.Instance.Return(nearbyPlayerList);
-                }
-                else if (avatar == null)
-                {
-                    return Logger.WarnReturn(false, "DoPowerEventActionSpawnLootTable(): avatar == null");
-                }
-
-                if (avatar != null)
-                {
-                    Player player = avatar.GetOwnerOfType<Player>();
-                    if (player == null) return Logger.WarnReturn(false, "DoPowerEventActionSpawnLootTable(): player == null");
-
+                foreach (Player player in nearbyPlayerList)
                     recipientPlayers.Add(player);
-                }
-
-                int level = lootTableContext.UseItemLevelForLootRoll ? Properties[PropertyEnum.ItemLevel] : Owner.CharacterLevel;
-
-                tables.Add((lootTableContext.LootTable, lootTableContext.PlaceLootInGeneralInventory ? LootActionType.Give : LootActionType.Spawn));
-
-                int recipientId = 1;
-                foreach (Player recipient in recipientPlayers)
-                {
-                    using LootInputSettings lootSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
-                    lootSettings.Initialize(LootContext.Drop, recipient, Owner, level);
-                    Game.LootManager.AwardLootFromTables(tables, lootSettings, recipientId++);
-                }
             }
-            finally
+            else if (avatar == null)
             {
-                HashSetPool<Player>.Instance.Return(recipientPlayers);
-                ListPool<(PrototypeId, LootActionType)>.Instance.Return(tables);
+                return Logger.WarnReturn(false, "DoPowerEventActionSpawnLootTable(): avatar == null");
+            }
+
+            if (avatar != null)
+            {
+                Player player = avatar.GetOwnerOfType<Player>();
+                if (player == null) return Logger.WarnReturn(false, "DoPowerEventActionSpawnLootTable(): player == null");
+
+                recipientPlayers.Add(player);
+            }
+
+            int level = lootTableContext.UseItemLevelForLootRoll ? Properties[PropertyEnum.ItemLevel] : Owner.CharacterLevel;
+
+            tables.Add((lootTableContext.LootTable, lootTableContext.PlaceLootInGeneralInventory ? LootActionType.Give : LootActionType.Spawn));
+
+            int recipientId = 1;
+            foreach (Player recipient in recipientPlayers)
+            {
+                using LootInputSettings lootSettings = ObjectPoolManager.Instance.Get<LootInputSettings>();
+                lootSettings.Initialize(LootContext.Drop, recipient, Owner, level);
+                Game.LootManager.AwardLootFromTables(tables, lootSettings, recipientId++);
             }
 
             return true;
@@ -1198,7 +1187,7 @@ namespace MHServerEmu.Games.Powers
             Power masterControlPower = null;
             TimeSpan maxTime = TimeSpan.Zero;
 
-            List<Power> controlPowerEndList = ListPool<Power>.Instance.Get();
+            using var controlPowerEndListHandle = ListPool<Power>.Instance.Get(out List<Power> controlPowerEndList);
 
             foreach (var condition in conditionCollection)
             {
@@ -1232,19 +1221,13 @@ namespace MHServerEmu.Games.Powers
             if (masterAvatar != null)
             {
                 if (target is Agent targetAgent && masterAvatar.SetControlledAgent(targetAgent) == false)
-                {
-                    ListPool<Power>.Instance.Return(controlPowerEndList);
-                    return Logger.WarnReturn(false,
-                        $"DoPowerEventActionControlAgentAI(): Failed SetControlledAgent {targetAgent}");
-                }
+                    return Logger.WarnReturn(false, $"DoPowerEventActionControlAgentAI(): Failed SetControlledAgent {targetAgent}");
 
                 masterControlPower?.HandleTriggerPowerEventOnEntityControlled();
             }
 
             foreach (var controlPower in controlPowerEndList)
                 controlPower?.SchedulePowerEnd(TimeSpan.Zero, EndPowerFlags.ExplicitCancel);
-
-            ListPool<Power>.Instance.Return(controlPowerEndList);
 
             return true;
         }
@@ -1281,7 +1264,7 @@ namespace MHServerEmu.Games.Powers
             if (settings.Flags.HasFlag(PowerActivationSettingsFlags.AutoActivate))
                 return;
 
-            List<Power> powersToOperateOnList = ListPool<Power>.Instance.Get();
+            using var powersToOperateOnListHandle = ListPool<Power>.Instance.Get(out List<Power> powersToOperateOnList);
             if (GetPowersToOperateOnForPowerEvent(Owner, triggeredPowerEvent, ref settings, powersToOperateOnList))
             {
                 TimeSpan cooldownDuration = TimeSpan.FromSeconds(triggeredPowerEvent.GetEventParam(Properties, Owner));
@@ -1296,14 +1279,12 @@ namespace MHServerEmu.Games.Powers
                     power.StartCooldown(cooldownDuration);
                 }
             }
-
-            ListPool<Power>.Instance.Return(powersToOperateOnList);
         }
 
         // 25
         private void DoPowerEventActionCooldownEnd(PowerEventActionPrototype triggeredPowerEvent, ref PowerActivationSettings settings)
         {
-            List<Power> powersToOperateOnList = ListPool<Power>.Instance.Get();
+            using var powersToOperateOnListHandle = ListPool<Power>.Instance.Get(out List<Power> powersToOperateOnList);
             if (GetPowersToOperateOnForPowerEvent(Owner, triggeredPowerEvent, ref settings, powersToOperateOnList))
             {
                 foreach (Power power in powersToOperateOnList)
@@ -1317,14 +1298,12 @@ namespace MHServerEmu.Games.Powers
                     power.EndCooldown();
                 }
             }
-
-            ListPool<Power>.Instance.Return(powersToOperateOnList);
         }
 
         // 26
         private void DoPowerEventActionCooldownModifySecs(PowerEventActionPrototype triggeredPowerEvent, ref PowerActivationSettings settings)
         {
-            List<Power> powersToOperateOnList = ListPool<Power>.Instance.Get();
+            using var powersToOperateOnListHandle = ListPool<Power>.Instance.Get(out List<Power> powersToOperateOnList);
             if (GetPowersToOperateOnForPowerEvent(Owner, triggeredPowerEvent, ref settings, powersToOperateOnList))
             {
                 TimeSpan offset = TimeSpan.FromSeconds(triggeredPowerEvent.GetEventParam(Properties, Owner));
@@ -1340,14 +1319,12 @@ namespace MHServerEmu.Games.Powers
                     power.ModifyCooldown(offset);
                 }
             }
-
-            ListPool<Power>.Instance.Return(powersToOperateOnList);
         }
 
         // 27
         private void DoPowerEventActionCooldownModifyPct(PowerEventActionPrototype triggeredPowerEvent, ref PowerActivationSettings settings)
         {
-            List<Power> powersToOperateOnList = ListPool<Power>.Instance.Get();
+            using var powersToOperateOnListHandle = ListPool<Power>.Instance.Get(out List<Power> powersToOperateOnList);
             if (GetPowersToOperateOnForPowerEvent(Owner, triggeredPowerEvent, ref settings, powersToOperateOnList))
             {
                 float eventParam = triggeredPowerEvent.GetEventParam(Properties, Owner);
@@ -1363,8 +1340,6 @@ namespace MHServerEmu.Games.Powers
                     power.ModifyCooldownByPercentage(eventParam);
                 }
             }
-
-            ListPool<Power>.Instance.Return(powersToOperateOnList);
         }
 
         // 28
@@ -1464,7 +1439,7 @@ namespace MHServerEmu.Games.Powers
             BlueprintId donationBlueprint = dataDirectory.GetPrototypeBlueprintDataRef(GameDatabase.AdvancementGlobalsPrototype.PetTechDonationItemPrototype);
             RarityPrototype rarityThresholdProto = itemDonateContext.RarityThreshold.As<RarityPrototype>();
 
-            List<Item> vacuumedItems = ListPool<Item>.Instance.Get();
+            using var vacuumedItemsHandle = ListPool<Item>.Instance.Get(out List<Item> vacuumedItems);
             foreach (WorldEntity worldEntity in region.IterateEntitiesInVolume(vacuumVolume, new()))
             {
                 // Skip non-item world entities
@@ -1508,7 +1483,6 @@ namespace MHServerEmu.Games.Powers
                 }
             }
 
-            ListPool<Item>.Instance.Return(vacuumedItems);
             return true;
         }
 

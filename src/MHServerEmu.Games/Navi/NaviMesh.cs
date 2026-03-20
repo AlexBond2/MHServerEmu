@@ -3,6 +3,7 @@ using MHServerEmu.Core.Collections;
 using MHServerEmu.Core.Collisions;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Logging;
+using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.VectorMath;
 using MHServerEmu.Games.Entities;
 using MHServerEmu.Games.GameData;
@@ -217,7 +218,7 @@ namespace MHServerEmu.Games.Navi
                 if (_navi.HasErrors() && _navi.CheckErrorLog(false, patch.ToString())) return false;
                 if (p0 == p1) continue;
 
-                NaviCdt.AddEdge(new(p0, p1, NaviEdgeFlags.Constraint, new(edge.Flags0, edge.Flags1)));
+                NaviCdt.AddEdge(new(p0, p1, NaviEdgeFlags.Constraint, edge.Flags0, edge.Flags1));
             }
 
             if (_navi.HasErrors() && _navi.CheckErrorLog(false, patch.ToString())) return false;
@@ -230,9 +231,10 @@ namespace MHServerEmu.Games.Navi
             if (removeExterior && _exteriorSeedEdge == null)  return;
             ClearMarkup();
 
-            Stack<MarkupState> stateStack = new ();
-            Stack<NaviEdge> edgeStack = new ();
-            NaviTriangle triangle = _exteriorSeedEdge.Triangles[0] ?? _exteriorSeedEdge.Triangles[1];
+            using var stateStackHandle = StackPool<MarkupState>.Instance.Get(out PoolableStack<MarkupState> stateStack);
+            using var edgeStackHandle = StackPool<NaviEdge>.Instance.Get(out PoolableStack<NaviEdge> edgeStack);
+            // Using the null coalescing operator here causes the compiler to crash on Ubuntu as of 2026/02/03.
+            NaviTriangle triangle = _exteriorSeedEdge.Triangles[0] != null ? _exteriorSeedEdge.Triangles[0] : _exteriorSeedEdge.Triangles[1];
 
             MarkupState state = new()
             {
@@ -429,8 +431,8 @@ namespace MHServerEmu.Games.Navi
             var triangle = NaviCdt.FindTriangleAtPoint(center);
             if (triangle == null) return;
             triangle.PathingFlags |= PathFlags.BlackOutZone;
-            Stack<NaviTriangle> triStack = new();
-            var naviSerialCheck = new NaviSerialCheck(NaviCdt);
+            using var triStackHandle = StackPool<NaviTriangle>.Instance.Get(out PoolableStack<NaviTriangle> triStack);
+            using NaviSerialCheck naviSerialCheck = new(NaviCdt);
             float radiousSq = radius * radius;
             triStack.Push(triangle);
             while (triStack.Count > 0)
@@ -456,8 +458,8 @@ namespace MHServerEmu.Games.Navi
             var triangle = NaviCdt.FindTriangleAtPoint(bound.Center);
             if (triangle == null) return spawnableArea;
             spawnableArea += triangle.CalcSpawnableArea();
-            Stack<NaviTriangle> triStack = new();
-            var naviSerialCheck = new NaviSerialCheck(NaviCdt);
+            using var triStackHandle = StackPool<NaviTriangle>.Instance.Get(out PoolableStack<NaviTriangle> triStack);
+            using NaviSerialCheck naviSerialCheck = new(NaviCdt);
             triStack.Push(triangle);
             while (triStack.Count > 0)
             {
@@ -609,7 +611,7 @@ namespace MHServerEmu.Games.Navi
         }
 
         public PointOnLineResult FindPointOnLineToOccupy(ref Vector3 resultPosition, Vector3 startPosition, Vector3 desiredPosition, float maxRange,
-            Bounds bounds, PathFlags pathFlags, BlockingCheckFlags blockFlags, bool skipTarget)
+            ref Bounds bounds, PathFlags pathFlags, BlockingCheckFlags blockFlags, bool skipTarget)
         {
             resultPosition = startPosition;
 
@@ -629,7 +631,7 @@ namespace MHServerEmu.Games.Navi
             float targetDistance = Math.Min(targetLength, maxRange);
             Vector3 targetPosition = startPosition + targetDirection * targetDistance;
 
-            Bounds checkBounds = new (bounds);
+            Bounds checkBounds = bounds;    // copy
             float stepSize = radius / 2.0f;
             for (int step = 0; step < 250; step++)
             {
@@ -641,7 +643,7 @@ namespace MHServerEmu.Games.Navi
                 {
                     float stepBackDistance = Math.Min(stepDistance, targetDistance);
                     checkBounds.Center = targetPosition - targetDirection * stepBackDistance;
-                    if (_region.IsLocationClear(checkBounds, pathFlags, PositionCheckFlags.CanBeBlockedEntity, blockFlags))
+                    if (_region.IsLocationClear(ref checkBounds, pathFlags, PositionCheckFlags.CanBeBlockedEntity, blockFlags))
                     {
                         resultPosition = checkBounds.Center;
                         return step == 0 ? PointOnLineResult.Success : PointOnLineResult.Clipped;
@@ -652,7 +654,7 @@ namespace MHServerEmu.Games.Navi
                 {
                     float stepForwardDistance = Math.Min(stepDistance, maxRange);
                     checkBounds.Center = targetPosition + targetDirection * stepForwardDistance;
-                    if (_region.IsLocationClear(checkBounds, pathFlags, PositionCheckFlags.CanBeBlockedEntity, blockFlags))
+                    if (_region.IsLocationClear(ref checkBounds, pathFlags, PositionCheckFlags.CanBeBlockedEntity, blockFlags))
                     {
                         resultPosition = checkBounds.Center;
                         return step == 0 ? PointOnLineResult.Success : PointOnLineResult.Clipped;

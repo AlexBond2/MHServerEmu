@@ -279,7 +279,7 @@ namespace MHServerEmu.Games.Powers
 
             if (powerProto.AttachSummonsToTarget || powerProto.UseTargetAsSource)
             {
-                List<WorldEntity> targetList = ListPool<WorldEntity>.Instance.Get();
+                using var targetListHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> targetList);
                 GetTargets(targetList, payload);
 
                 foreach (var target in targetList)
@@ -287,8 +287,6 @@ namespace MHServerEmu.Games.Powers
 
                 if (targetList.Count == 0 && powerProto.UseTargetAsSource)
                     SummonPayloadEntity(manager, powerProto, payload, null);
-
-                ListPool<WorldEntity>.Instance.Return(targetList);
             }
             else
             {
@@ -545,7 +543,7 @@ namespace MHServerEmu.Games.Powers
                 var offsetVector = contextProto.SummonOffsetVector.ToVector3();
                 if (owner != null && owner.IsInWorld)
                 {
-                    var regionLocation = owner.RegionLocation;
+                    ref RegionLocation regionLocation = ref owner.RegionLocation;
                     var transform = Transform3.BuildTransform(regionLocation.Position, regionLocation.Orientation);
                     offsetVector = transform * offsetVector;
                 }
@@ -748,7 +746,7 @@ namespace MHServerEmu.Games.Powers
             var inventory = Owner.SummonedInventory;
             if (inventory == null) return count;
 
-            List<WorldEntity> summons = ListPool<WorldEntity>.Instance.Get();
+            using var summonsHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> summons);
 
             foreach (var summoned in new SummonedEntityIterator(Owner))
             {
@@ -776,8 +774,6 @@ namespace MHServerEmu.Games.Powers
                 }
             }
 
-            ListPool<WorldEntity>.Instance.Return(summons);
-
             return count;
         }
 
@@ -786,7 +782,7 @@ namespace MHServerEmu.Games.Powers
             var inventory = owner.SummonedInventory;
             if (inventory == null) return;
             
-            List<WorldEntity> summons = ListPool<WorldEntity>.Instance.Get();
+            using var summonsHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> summons);
 
             foreach (var summoned in new SummonedEntityIterator(owner))
             {
@@ -803,8 +799,6 @@ namespace MHServerEmu.Games.Powers
 
             foreach (var summoned in summons)
                 KillSummoned(summoned, owner);
-
-            ListPool<WorldEntity>.Instance.Return(summons);
         }
 
         private static List<Vector3> GetSummonPositions(WorldEntity owner, SummonPowerPrototype powerProto, WorldEntityPrototype summonProto, SummonEntityContextPrototype contextProto, 
@@ -852,10 +846,10 @@ namespace MHServerEmu.Games.Powers
             {
                 float summonRadius = contextProto.SummonRadius;
                 float maxRadius = Segment.IsNearZero(summonRadius) ? powerProto.Radius : summonRadius;
-                if (region.ChooseRandomPositionNearPoint(bounds, pathFlags, posFlags, blockingFlags, 0, maxRadius, out resultPosition) == false)
+                if (region.ChooseRandomPositionNearPoint(ref bounds, pathFlags, posFlags, blockingFlags, 0, maxRadius, out resultPosition) == false)
                     return null;
             }
-            else if (pathFlags != PathFlags.None && region.IsLocationClear(bounds, pathFlags, posFlags, blockingFlags) == false)
+            else if (pathFlags != PathFlags.None && region.IsLocationClear(ref bounds, pathFlags, posFlags, blockingFlags) == false)
             {
                 if (contextProto.EnforceExactSummonPos == false)
                 {
@@ -864,13 +858,13 @@ namespace MHServerEmu.Games.Powers
                     {
                         var ownerPosition = owner.RegionLocation.Position;
                         foundPosition = region.NaviMesh.FindPointOnLineToOccupy(ref resultPosition, ownerPosition, bounds.Center,
-                            Vector3.Distance2D(ownerPosition, bounds.Center), bounds, pathFlags, blockingFlags, true) != PointOnLineResult.Failed;
+                            Vector3.Distance2D(ownerPosition, bounds.Center), ref bounds, pathFlags, blockingFlags, true) != PointOnLineResult.Failed;
                     }
 
                     if (foundPosition == false)
                     {
                         float maxRadius = MathF.Max(radius * 2.0f, contextProto.SummonRadius);
-                        if (region.ChooseRandomPositionNearPoint(bounds, pathFlags, posFlags, blockingFlags, 0, maxRadius, out resultPosition) == false)
+                        if (region.ChooseRandomPositionNearPoint(ref bounds, pathFlags, posFlags, blockingFlags, 0, maxRadius, out resultPosition) == false)
                             return null;
                     }
                 }
@@ -883,7 +877,7 @@ namespace MHServerEmu.Games.Powers
             if (summonWidthMax > 0.0f)
             {
                 bounds.Center = resultPosition;
-                return GenerateSummonPositions(bounds, summonWidthMax, ref orientation, contextProto.SummonOffsetAngle, region, pathFlags, posFlags);
+                return GenerateSummonPositions(ref bounds, summonWidthMax, ref orientation, contextProto.SummonOffsetAngle, region, pathFlags, posFlags);
             }
 
             if (Segment.IsNearZero(contextProto.SummonOffsetAngle) == false)
@@ -894,7 +888,7 @@ namespace MHServerEmu.Games.Powers
             return positionList;
         }
 
-        private static List<Vector3> GenerateSummonPositions(Bounds bounds, float summonWidthMax, ref Orientation orientation, float summonOffsetAngle, 
+        private static List<Vector3> GenerateSummonPositions(ref Bounds bounds, float summonWidthMax, ref Orientation orientation, float summonOffsetAngle, 
             Region region, PathFlags pathFlags, PositionCheckFlags posFlags)
         {
             var position = bounds.Center;
@@ -936,7 +930,7 @@ namespace MHServerEmu.Games.Powers
                 bounds.Center = leftPos;
                 if (blockedL == false)
                 {
-                    if (region.IsLocationClear(bounds, pathFlags, posFlags) == true)
+                    if (region.IsLocationClear(ref bounds, pathFlags, posFlags) == true)
                         resultPositions.Add(leftPos);
                     else
                         blockedL = true;
@@ -945,7 +939,7 @@ namespace MHServerEmu.Games.Powers
                 bounds.Center = rightPos;
                 if (blockedR == false)
                 {
-                    if (region.IsLocationClear(bounds, pathFlags, posFlags) == true)
+                    if (region.IsLocationClear(ref bounds, pathFlags, posFlags) == true)
                         resultPositions.Add(rightPos);
                     else
                         blockedR = true;

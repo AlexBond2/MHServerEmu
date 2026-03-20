@@ -1,4 +1,6 @@
-﻿using MHServerEmu.Core.Logging;
+﻿using System.Runtime.InteropServices;
+using MHServerEmu.Core.Collections;
+using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.VectorMath;
 using MHServerEmu.Games.Entities;
 using MHServerEmu.Games.GameData;
@@ -12,10 +14,10 @@ namespace MHServerEmu.Games.Powers
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        private readonly float[] _damageForClient = new float[(int)DamageType.NumDamageTypes];
+        private List<Condition> _conditionAddList;
+        private List<ulong> _conditionRemoveList;
 
-        private readonly List<Condition> _conditionAddList = new();
-        private readonly List<ulong> _conditionRemoveList = new();
+        private InlineArray3<float> _damageForClient;
 
         public float HealingForClient { get; set; }
         public AssetId PowerAssetRefOverride { get; private set; }
@@ -27,8 +29,8 @@ namespace MHServerEmu.Games.Powers
 
         public PowerActivationSettings ActivationSettings { get; set; }
 
-        public IReadOnlyList<Condition> ConditionAddList { get => _conditionAddList; }
-        public IReadOnlyList<ulong> ConditionRemoveList { get => _conditionRemoveList; }
+        public IReadOnlyList<Condition> ConditionAddList { get => _conditionAddList != null ? _conditionAddList : Array.Empty<Condition>(); }
+        public IReadOnlyList<ulong> ConditionRemoveList { get => _conditionRemoveList != null ? _conditionRemoveList : Array.Empty<ulong>(); }
 
         public bool IsBlocked { get => Flags.HasFlag(PowerResultFlags.Blocked); }
         public bool IsDodged { get => Flags.HasFlag(PowerResultFlags.Dodged); }
@@ -51,11 +53,10 @@ namespace MHServerEmu.Games.Powers
         {
             base.Clear();
 
-            for (int i = 0; i < _damageForClient.Length; i++)
-                _damageForClient[i] = default;
+            ((Span<float>)_damageForClient).Clear();
 
             ClearConditionInstances();
-            _conditionRemoveList.Clear();
+            _conditionRemoveList?.Clear();
 
             TeleportPosition = default;
             KnockbackSourcePosition = default;
@@ -70,6 +71,9 @@ namespace MHServerEmu.Games.Powers
 
         public void ClearConditionInstances()
         {
+            if (_conditionAddList == null)
+                return;
+
             foreach (Condition condition in _conditionAddList)
             {
                 if (condition.IsInPool == false && condition.IsInCollection == false)
@@ -81,9 +85,9 @@ namespace MHServerEmu.Games.Powers
 
         public bool HasDamageForClient()
         {
-            for (int i = 0; i < _damageForClient.Length; i++)
+            foreach (float damage in _damageForClient)
             {
-                if (_damageForClient[i] > 0f)
+                if (damage > 0f)
                     return true;
             }
 
@@ -101,8 +105,8 @@ namespace MHServerEmu.Games.Powers
         public float GetTotalDamageForClient()
         {
             float totalDamage = 0f;
-            for (int i = 0; i < _damageForClient.Length; i++)
-                totalDamage += _damageForClient[i];
+            foreach (float damage in _damageForClient)
+                totalDamage += damage;
             return totalDamage;
         }
 
@@ -130,12 +134,14 @@ namespace MHServerEmu.Games.Powers
         public bool AddConditionToAdd(Condition condition)
         {
             if (condition == null) return Logger.WarnReturn(false, "AddConditionToAdd(): condition == null");
+            _conditionAddList ??= new();
             _conditionAddList.Add(condition);
             return true;
         }
 
         public bool AddConditionToRemove(ulong conditionId)
         {
+            _conditionRemoveList ??= new();
             _conditionRemoveList.Add(conditionId);
             return true;
         }
@@ -159,7 +165,7 @@ namespace MHServerEmu.Games.Powers
                 return true;
             }
 
-            if (_conditionAddList.Count > 0 || _conditionRemoveList.Count > 0)
+            if (_conditionAddList?.Count > 0 || _conditionRemoveList?.Count > 0)
                 return true;
 
             if ((Flags & PowerResultFlags.HasResultsFlags) != 0)

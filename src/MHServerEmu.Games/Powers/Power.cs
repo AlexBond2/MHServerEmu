@@ -194,7 +194,7 @@ namespace MHServerEmu.Games.Powers
 
             if (Owner is Avatar avatar && (avatar.HasPowerInPowerProgression(PrototypeDataRef) || avatar.HasMappedPower(PrototypeDataRef)))
             {
-                Dictionary<PropertyId, PropertyValue> bonusDict = DictionaryPool<PropertyId, PropertyValue>.Instance.Get();
+                using var bonusDictHandle = DictionaryPool<PropertyId, PropertyValue>.Instance.Get(out Dictionary<PropertyId, PropertyValue> bonusDict);
 
                 foreach (var kvp in avatar.Properties.IteratePropertyRange(PropertyEnum.PowerChargesMaxBonusForKwd))
                     bonusDict.Add(kvp.Key, kvp.Value);
@@ -214,8 +214,6 @@ namespace MHServerEmu.Games.Powers
 
                     avatar.Properties[PropertyEnum.PowerChargesMaxBonus, PrototypeDataRef] = kvp.Value;
                 }
-
-                DictionaryPool<PropertyId, PropertyValue>.Instance.Return(bonusDict);
             }
 
             return true;
@@ -778,9 +776,8 @@ namespace MHServerEmu.Games.Powers
             }
 
             settings.OriginalTargetPosition = settings.TargetPosition;
-            // EntityHelper.CrateOrb(EntityHelper.TestOrb.Red, settings.TargetPosition, Owner.Region);
             GenerateActualTargetPosition(settings.TargetEntityId, settings.OriginalTargetPosition, out settings.TargetPosition, ref settings);
-            // EntityHelper.CrateOrb(EntityHelper.TestOrb.BigRed, settings.TargetPosition, Owner.Region);
+
             MovementPowerPrototype movementPowerProto = FindPowerPrototype<MovementPowerPrototype>(powerProto);
             if (movementPowerProto == null || movementPowerProto.TeleportMethod != TeleportMethodType.Teleport)
                 ComputePowerMovementSettings(movementPowerProto, ref settings);
@@ -994,8 +991,8 @@ namespace MHServerEmu.Games.Powers
             payload.OnDeliverPayload();
 
             // Find targets for this power application
-            List<WorldEntity> targetList = ListPool<WorldEntity>.Instance.Get();
-            List<PowerResults> targetResultsList = ListPool<PowerResults>.Instance.Get();
+            using var targetListHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> targetList);
+            using var targetResultsListHandle = ListPool<PowerResults>.Instance.Get(out List<PowerResults> targetResultsList);
 
             GetTargets(targetList, payload);
             payload.Properties[PropertyEnum.TargetsHit] = targetList.Count;
@@ -1118,9 +1115,6 @@ namespace MHServerEmu.Games.Powers
                 if (applied == false)
                     ownerResults.Clear(); // leak prevention
             }
-
-            ListPool<WorldEntity>.Instance.Return(targetList);
-            ListPool<PowerResults>.Instance.Return(targetResultsList);
 
             // Break stealth if needed
             TryBreakStealth(powerOwner, ultimateOwner, powerProto, isHostile, false);
@@ -1917,7 +1911,7 @@ namespace MHServerEmu.Games.Powers
             if (conditionCollection == null)
                 return;
 
-            List<TrackedCondition> unpausedConditionList = ListPool<TrackedCondition>.Instance.Get();
+            using var unpausedConditionListHandle = ListPool<TrackedCondition>.Instance.Get(out List<TrackedCondition> unpausedConditionList);
 
             for (int i = 0; i < _trackedConditionList.Count; i++)
             {
@@ -1936,13 +1930,11 @@ namespace MHServerEmu.Games.Powers
             // Readd conditions that were unpaused
             foreach (TrackedCondition unpausedCondition in unpausedConditionList)
                 _trackedConditionList.Add(unpausedCondition);
-
-            ListPool<TrackedCondition>.Instance.Return(unpausedConditionList);
         }
 
         private void RemoveTrackedConditions(bool allowUnpause)
         {
-            List<TrackedCondition> unpausedConditionList = ListPool<TrackedCondition>.Instance.Get();
+            using var unpausedConditionListHandle = ListPool<TrackedCondition>.Instance.Get(out List<TrackedCondition> unpausedConditionList);
 
             EntityManager entityManager = Game.EntityManager;
 
@@ -1977,7 +1969,6 @@ namespace MHServerEmu.Games.Powers
             }
 
             RefreshConditionIndexProperties();
-            ListPool<TrackedCondition>.Instance.Return(unpausedConditionList);
         }
 
         private void RefreshConditionIndexProperties()
@@ -2177,7 +2168,7 @@ namespace MHServerEmu.Games.Powers
             bool requiresLineOfSight = RequiresLineOfSight(powerProto);
             Sphere bounds = new(Owner.RegionLocation.Position, powerProto.Radius);
 
-            foreach (WorldEntity entity in region.IterateEntitiesInVolume(bounds, new(EntityRegionSPContextFlags.ActivePartition)))
+            foreach (WorldEntity entity in region.IterateEntitiesInVolume(bounds, new(EntityRegionSPContextFlags.PrimaryPartition)))
             {
                 if (IsValidTarget(entity) == false)
                     continue;
@@ -2188,7 +2179,7 @@ namespace MHServerEmu.Games.Powers
                 if (requiresLineOfSight)
                 {
                     Vector3? resultPosition = null;
-                    if (PowerLOSCheck(Owner.RegionLocation, entity.RegionLocation.Position, entity.Id, ref resultPosition, LOSCheckAlongGround()) == false)
+                    if (PowerLOSCheck(ref Owner.RegionLocation, entity.RegionLocation.Position, entity.Id, ref resultPosition, LOSCheckAlongGround()) == false)
                         continue;
                 }
 
@@ -3745,14 +3736,12 @@ namespace MHServerEmu.Games.Powers
                 // Owner is excluded from power activation messages unless explicitly flagged or this is a combo power triggered by the server (therefore the client is not aware of it)
                 bool skipOwner = settings.Flags.HasFlag(PowerActivationSettingsFlags.NotifyOwner) == false && settings.Flags.HasFlag(PowerActivationSettingsFlags.ServerCombo) == false;
 
-                List<PlayerConnection> interestedClientList = ListPool<PlayerConnection>.Instance.Get();
+                using var interestedClientListHandle = ListPool<PlayerConnection>.Instance.Get(out List<PlayerConnection> interestedClientList);
                 if (networkManager.GetInterestedClients(interestedClientList, Owner, AOINetworkPolicyValues.AOIChannelProximity, skipOwner))
                 {
                     NetMessageActivatePower activatePowerMessage = ArchiveMessageBuilder.BuildActivatePowerMessage(this, ref settings);
                     networkManager.SendMessageToMultiple(interestedClientList, activatePowerMessage);
                 }
-
-                ListPool<PlayerConnection>.Instance.Return(interestedClientList);
             }
 
             // ScoringEvent AvatarUsedPower
@@ -3867,7 +3856,7 @@ namespace MHServerEmu.Games.Powers
                             locomotionOptions.Flags |= LocomotionFlags.DisableOrientation;
 
                         // NOTE: locomotor.FollowPath is client-only, so we just use 
-                        locomotor.MoveTo(powerApplication.TargetPosition, locomotionOptions);
+                        locomotor.MoveTo(powerApplication.TargetPosition, ref locomotionOptions);
                     }
                 }
             }
@@ -4055,7 +4044,7 @@ namespace MHServerEmu.Games.Powers
             // The owner's client should have canceled the power it requested on its own
             bool skipOwner = flags.HasFlag(EndPowerFlags.ClientRequest);
 
-            List<PlayerConnection> interestedClientList = ListPool<PlayerConnection>.Instance.Get();
+            using var interestedClientListHandle = ListPool<PlayerConnection>.Instance.Get(out List<PlayerConnection> interestedClientList);
             if (networkManager.GetInterestedClients(interestedClientList, Owner, AOINetworkPolicyValues.AOIChannelProximity, skipOwner))
             {
                 // NOTE: Although NetMessageCancelPower is not an archive, it uses power prototype enums
@@ -4068,8 +4057,6 @@ namespace MHServerEmu.Games.Powers
 
                 networkManager.SendMessageToMultiple(interestedClientList, cancelPowerMessage);
             }
-
-            ListPool<PlayerConnection>.Instance.Return(interestedClientList);
         }
 
         protected virtual bool OnEndPowerCheckLoopEnd(EndPowerFlags flags)
@@ -4226,7 +4213,7 @@ namespace MHServerEmu.Games.Powers
 
                     Vector3? collisionPosition = Vector3.Zero;
                     Vector3 sweepVelocity = Vector3.Normalize(actualTargetPosition - ownerPosition) * GetRange();
-                    var firstHitEntity = region.SweepToFirstHitEntity(Owner.Bounds, sweepVelocity, ref collisionPosition,
+                    var firstHitEntity = region.SweepToFirstHitEntity(ref Owner.Bounds, sweepVelocity, ref collisionPosition,
                         new MovementPowerEntityCollideFunc(1 << (int)BoundsMovementPowerBlockType.All));
                     if (firstHitEntity != null)
                     {
@@ -4248,7 +4235,7 @@ namespace MHServerEmu.Games.Powers
                 if (movementPowerProto.MoveFullDistance == false || movementPowerProto.TeleportMethod != TeleportMethodType.None)
                 {
                     Vector3? resultPostion = actualTargetPosition;
-                    var result = PowerPositionSweep(Owner.RegionLocation, actualTargetPosition, targetId, ref resultPostion, isBlocked, rangeOverride);
+                    var result = PowerPositionSweep(ref Owner.RegionLocation, actualTargetPosition, targetId, ref resultPostion, isBlocked, rangeOverride);
                     actualTargetPosition = resultPostion.Value;
 
                     if (result == PowerPositionSweepResult.Error || result == PowerPositionSweepResult.TargetPositionInvalid)
@@ -4548,13 +4535,12 @@ namespace MHServerEmu.Games.Powers
             if (region == null) return Logger.WarnReturn(false, "GetAOETargets(): region == null");
 
             // Look for potential targets in the AOE shape
-            List<WorldEntity> potentialTargetList = ListPool<WorldEntity>.Instance.Get();
+            using var potentialTargetListHandle = ListPool<WorldEntity>.Instance.Get(out List<WorldEntity> potentialTargetList);
             GetPotentialTargetsInShape(region, radius, in aoePosition, in aoeDirection, powerProto, potentialTargetList);
 
             // Set up random
             if (reachProto.RandomAOETargets && randomSeed == 0)
             {
-                ListPool<WorldEntity>.Instance.Return(potentialTargetList);
                 return Logger.WarnReturn(false,
                     $"GetAOETargets(): A power has RandomAOETargets set true, but no random seed to do it with!\n Power: {powerProto}\n Owner: {owner}\n");
             }
@@ -4589,7 +4575,6 @@ namespace MHServerEmu.Games.Powers
                 }
             }
 
-            ListPool<WorldEntity>.Instance.Return(potentialTargetList);
             return true;
         }
 
@@ -4602,11 +4587,11 @@ namespace MHServerEmu.Games.Powers
                 aabb.Max.Z = float.MaxValue;
                 aabb.Min.Z = -float.MaxValue;
 
-                region.GetEntitiesInVolume(potentialTargetList, aabb, new(EntityRegionSPContextFlags.ActivePartition));
+                region.GetEntitiesInVolume(potentialTargetList, aabb, new(EntityRegionSPContextFlags.PrimaryPartition));
                 return;
             }
 
-            region.GetEntitiesInVolume(potentialTargetList, new Sphere(position, radius), new(EntityRegionSPContextFlags.ActivePartition));
+            region.GetEntitiesInVolume(potentialTargetList, new Sphere(position, radius), new(EntityRegionSPContextFlags.PrimaryPartition));
         }
 
         private static bool GetNextTargetInAOE(List<WorldEntity> potentialTargetList, ref int index, bool pickRandom, GRandom random, out WorldEntity target)
@@ -4700,7 +4685,7 @@ namespace MHServerEmu.Games.Powers
             Sphere sphere = new(userPosition + offset, 25f);
 
             // Look for a target in the volume
-            foreach (WorldEntity target in region.IterateEntitiesInVolume(sphere, new(EntityRegionSPContextFlags.ActivePartition)))
+            foreach (WorldEntity target in region.IterateEntitiesInVolume(sphere, new(EntityRegionSPContextFlags.PrimaryPartition)))
             {
                 if (IsValidTarget(powerProto, user, userAllianceProto, target))
                 {
@@ -4731,10 +4716,10 @@ namespace MHServerEmu.Games.Powers
         private void GenerateMovementPathToTarget(MovementPowerPrototype movementPowerProto, ref PowerActivationSettings settings)
         {
             Vector3? resultPosition = settings.TargetPosition;
-            RegionLocation regionLocation = new(Owner.RegionLocation);
+            RegionLocation regionLocation = Owner.RegionLocation;   // copy
             regionLocation.SetPosition(settings.UserPosition);
 
-            PowerPositionSweepResult result = PowerPositionSweepInternal(regionLocation, settings.TargetPosition,
+            PowerPositionSweepResult result = PowerPositionSweepInternal(ref regionLocation, settings.TargetPosition,
                 settings.TargetEntityId, ref resultPosition, false, false);
 
             if (result == PowerPositionSweepResult.Clipped)
@@ -4883,7 +4868,7 @@ namespace MHServerEmu.Games.Powers
 
             if (Segment.IsNearZero(floorOffsetLength) == false)
             {
-                Bounds teleportPositionBounds = new(Owner.Bounds);
+                Bounds teleportPositionBounds = Owner.Bounds;   // copy
                 teleportPositionBounds.Center = teleportPosition;
 
                 Aabb aabb = Owner.RegionBounds;
@@ -4891,14 +4876,14 @@ namespace MHServerEmu.Games.Powers
 
                 float minIntersection = float.MaxValue;
 
-                foreach (WorldEntity worldEntity in region.IterateEntitiesInRegion(new()))
+                foreach (WorldEntity worldEntity in region.IterateEntitiesInRegion(new(EntityRegionSPContextFlags.UnrestrictedPartitions)))
                 {
                     if (worldEntity.Properties.HasProperty(PropertyEnum.BlocksTeleports) == false)
                         continue;
 
-                    Bounds blockingEntityBounds = worldEntity.Bounds;
+                    ref Bounds blockingEntityBounds = ref worldEntity.Bounds;
 
-                    if (blockingEntityBounds.Intersects(teleportPositionBounds) == false)
+                    if (blockingEntityBounds.Intersects(ref teleportPositionBounds) == false)
                         continue;
 
                     float intersection = 0f;
@@ -5007,7 +4992,7 @@ namespace MHServerEmu.Games.Powers
                 int lowestTargetIndex = int.MaxValue;
 
                 Sphere bounds = new(lastTargetPosition, range);
-                foreach (WorldEntity potentialTarget in region.IterateEntitiesInVolume(bounds, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (WorldEntity potentialTarget in region.IterateEntitiesInVolume(bounds, new(EntityRegionSPContextFlags.PrimaryPartition)))
                 {
                     if (potentialTarget.Id == lastTargetId)
                         continue;

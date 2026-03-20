@@ -289,7 +289,7 @@ namespace MHServerEmu.Games.Populations
 
                 if (markerEventScheduler.MissionSchedulers.Count > 0)
                 {
-                    List<SpawnMissionScheduler> missionSchedulers = ListPool<SpawnMissionScheduler>.Instance.Get();
+                    using var missionSchedulersHandle = ListPool<SpawnMissionScheduler>.Instance.Get(out List<SpawnMissionScheduler> missionSchedulers);
                     markerEventScheduler.GetSortedMissionSchedulers(missionSchedulers);
 
                     foreach (bool critical in Priority)
@@ -299,8 +299,6 @@ namespace MHServerEmu.Games.Populations
 
                     foreach (var scheduler in missionSchedulers)
                         scheduler.PushFailedObjects();
-
-                    ListPool<SpawnMissionScheduler>.Instance.Return(missionSchedulers);
                 }
 
                 if (markerEventScheduler.MarkerSchedulers.Count > 0)
@@ -318,7 +316,7 @@ namespace MHServerEmu.Games.Populations
             MarkerSchedule(markerRef);
         }
 
-        public void SpawnObject(PopulationObjectPrototype popObject, RegionLocation location, PropertyCollection properties, SpawnFlags spawnFlags, WorldEntity spawner, List<WorldEntity> entities)
+        public void SpawnObject(PopulationObjectPrototype popObject, ref RegionLocation location, PropertyCollection properties, SpawnFlags spawnFlags, WorldEntity spawner, List<WorldEntity> entities)
         {
             var region = location.Region;
             GRandom random = Game.Random;
@@ -421,12 +419,12 @@ namespace MHServerEmu.Games.Populations
             }
         }
 
-        public IEnumerable<BlackOutZone> IterateBlackOutZoneInVolume<B>(B bound) where B : IBounds
+        public BlackOutSpatialPartition.ElementIterator<TVolume> IterateBlackOutZoneInVolume<TVolume>(TVolume volume) where TVolume : IBounds
         {
-            if (_blackOutSpatialPartition != null)
-                return _blackOutSpatialPartition.IterateElementsInVolume(bound);
-            else
-                return Enumerable.Empty<BlackOutZone>();
+            if (_blackOutSpatialPartition == null)
+                return default;
+
+            return _blackOutSpatialPartition.IterateElementsInVolume(volume);
         }
 
         public void InitializeSpacialPartition(in Aabb bound)
@@ -447,8 +445,12 @@ namespace MHServerEmu.Games.Populations
                     if (zone.MissionRef != missionRef)
                         return false;
             }
-            else if (IterateBlackOutZoneInVolume(sphere).Any() == false)
-                return false;
+            else
+            {
+                using var enumerator = IterateBlackOutZoneInVolume(sphere).GetEnumerator();
+                if (enumerator.MoveNext() == false)
+                    return false;
+            }
 
             return true;
         }

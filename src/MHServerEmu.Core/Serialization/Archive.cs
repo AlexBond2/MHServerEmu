@@ -19,38 +19,48 @@ namespace MHServerEmu.Core.Serialization
         Disk = 4            // Server <-> File
     }
 
-    // We are most likely not going to have as much versioning as the original game,
-    // so we will use ArchiveVersion for all archive versioning. At some point when
-    // things get more stable we may want to clear this and force a wipe of everything.
     public enum ArchiveVersion : uint
     {
         Invalid = 0,
-        Initial = 1,
-        AddedMissions = 2,
-        AddedVendorPurchaseData = 3,
-        ImplementedConditionPersistence = 4,
-        ImplementedLoginRewards = 5,
-        ImplementedMapDiscoveryDataPersistence = 6,
-        AddedRegionProtoRefToMapDiscoveryData = 7,
+        // Versions 1-8 were used in the 0.x branch, so we start at 9 here.
+        Initial = 9,
 
         // Update the current version if you add any    <---------
-        Current = AddedRegionProtoRefToMapDiscoveryData
+        Current = Initial
+    }
+
+    public enum GameBuildNumber : uint
+    {
+        Invalid = 0,
+
+        // Changelist is the most consistent single number we have to identify different builds of the game, so use it for persistent archives.
+        // Add more changelist numbers here for any other versions of the game we are going to support.
+        _1_10_0_69   = 324,
+        _1_10_0_643  = 16688,
+        _1_48_0_1618 = 380454,
+        _1_48_0_1712 = 391562,
+        _1_52_0_1700 = 479899,
+        _1_53_0_203  = 493640,
+
+        Current = _1_52_0_1700
     }
 
     /// <summary>
     /// An implementation of the custom Gazillion serialization archive format.
     /// </summary>
-    public class Archive : IDisposable
+    public sealed class Archive : IDisposable
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        // Reuse the same buffers for all archives on the same thread. In practice this means one buffer instance of each type per game.
+        // Reuse the same buffers for all archives on the same game thread.
+        [ThreadStatic]
+        private static byte[] ReadBuffer;
+        [ThreadStatic]
+        private static byte[] WriteBuffer;
         [ThreadStatic]
         private static MemoryStream SharedAutoBuffer;
-        [ThreadStatic]
-        private static byte[] CodedOutputStreamBuffer; 
 
-        private readonly MemoryStream _bufferStream;  // MemoryStream replaces AutoBuffer from the original implementation
+        private readonly MemoryStream _buffer;  // MemoryStream replaces StreamAutoBuffer from the original implementation
 
         // C# coded stream implementation is buffered, so we have to use the same stream for the whole archive
         private readonly CodedOutputStream _cos;
@@ -108,20 +118,15 @@ namespace MHServerEmu.Core.Serialization
             if ((serializeType == ArchiveSerializeType.Replication || serializeType == ArchiveSerializeType.Database) == false)
                 throw new NotImplementedException($"Unsupported archive serialize type {serializeType}.");
 
-            // Initialize new buffers if this is being called for the first time on this thread.
-            if (SharedAutoBuffer == null)
-            {
-                SharedAutoBuffer = new(1024);
-                CodedOutputStreamBuffer = new byte[32];     // We flush after every value, so we can use very small buffer sizes (default is 4096).
-            }      
+            InitializeBuffers();
 
             // Reuse the same stream for all packing archives
-            _bufferStream = SharedAutoBuffer;
-            if (_bufferStream.Length > 0)
-                _bufferStream.SetLength(0);
+            _buffer = SharedAutoBuffer;
+            if (_buffer.Length > 0)
+                _buffer.SetLength(0);
 
             // Use reflection hackery to reuse the same buffer for all coded output streams, see ProtobufHelper for details.
-            _cos = ProtobufHelper.CodedOutputStreamEx.CreateInstance(_bufferStream, CodedOutputStreamBuffer);
+            _cos = ProtobufHelper.CodedOutputStreamEx.CreateInstance(_buffer, WriteBuffer);
 
             SerializeType = serializeType;
             ReplicationPolicy = replicationPolicy;
@@ -139,8 +144,10 @@ namespace MHServerEmu.Core.Serialization
             if ((serializeType == ArchiveSerializeType.Replication || serializeType == ArchiveSerializeType.Database) == false)
                 throw new NotImplementedException($"Unsupported archive serialize type {serializeType}.");
 
-            _bufferStream = new(buffer);
-            _cis = CodedInputStream.CreateInstance(_bufferStream);
+            InitializeBuffers();
+
+            _buffer = new(buffer);
+            _cis = CodedInputStream.CreateInstance(_buffer, ReadBuffer);
 
             SerializeType = serializeType;
             IsPacking = false;
@@ -157,13 +164,34 @@ namespace MHServerEmu.Core.Serialization
             // We use ByteString.Unsafe here to avoid copying data one extra time (ByteString -> Stream instead of ByteString -> Buffer -> Stream).
         }
 
+        private static void InitializeBuffers()
+        {
+            // Initialize new buffers if this is being called for the first time on this thread.
+            // NOTE: This approach prevents us from doing recursive writing of multiple archives on the same thread.
+            // In practice this is not a limitation that affects us, but it is something to keep in mind.
+            if (ReadBuffer == null || WriteBuffer == null || SharedAutoBuffer == null)
+            {
+                ReadBuffer = new byte[4096];
+                WriteBuffer = new byte[32];     // We flush after every value, so we can use very small buffer sizes for output (default is 4096).
+                SharedAutoBuffer = new(1024);
+            }
+        }
+
+        public void Dispose()
+        {
+            _buffer.SetLength(0);
+        }
+
         /// <summary>
         /// Returns the <see cref="MemoryStream"/> instance that acts as the AutoBuffer for this <see cref="Archive"/>.
         /// </summary>
         /// <remarks>
         /// AutoBuffer is the name of the data structure that backs archives in the client.
         /// </remarks>
-        public MemoryStream AccessAutoBuffer() => _bufferStream;
+        public MemoryStream AccessAutoBuffer()
+        {
+            return _buffer;
+        }
 
         /// <summary>
         /// Converts the underlying <see cref="MemoryStream"/> to <see cref="ByteString"/>.
@@ -171,7 +199,13 @@ namespace MHServerEmu.Core.Serialization
         public ByteString ToByteString()
         {
             // We use ByteString.Unsafe here to avoid copying data one extra time (Stream -> ByteString instead of Stream -> Buffer -> ByteString).
-            return ByteString.Unsafe.FromBytes(_bufferStream.ToArray());
+            return ByteString.Unsafe.FromBytes(_buffer.ToArray());
+        }
+
+        public Span<byte> AsSpan()
+        {
+            byte[] buffer = _buffer.GetBuffer();
+            return buffer.AsSpan(0, (int)CurrentOffset);
         }
 
         /// <summary>
@@ -183,8 +217,14 @@ namespace MHServerEmu.Core.Serialization
 
             if (IsPersistent)
             {
+                // Write archive size placeholder that will be updated via UpdateSizeInArchive() when other data is written.
+                WriteUnencodedStream(0u);
+
                 uint version = (uint)Version;
                 success &= Transfer(ref version);
+
+                uint gameBuildNumber = (uint)GameBuildNumber.Current;
+                success &= Transfer(ref gameBuildNumber);
             }
             else if (IsReplication)
             {
@@ -204,9 +244,24 @@ namespace MHServerEmu.Core.Serialization
 
             if (IsPersistent)
             {
+                uint sizeUsed = 0;
+                success &= ReadUnencodedStream(ref sizeUsed);
+
+                if (sizeUsed != _buffer.Length)
+                {
+                    SetError("Buffer size mismatch!");
+                    return false;
+                }
+
                 uint version = 0;
                 success &= Transfer(ref version);
                 Version = (ArchiveVersion)version;
+
+                // For now just log a warning if there is a game build mismatch, in the future we can use this for migration between versions.
+                uint gameBuildNumber = 0;
+                success &= Transfer(ref gameBuildNumber);
+                if (gameBuildNumber != (uint)GameBuildNumber.Current)
+                    Logger.Warn($"Game build number mismatch: expected {(uint)GameBuildNumber.Current}, got {gameBuildNumber}");
             }
             else if (IsReplication)
             {
@@ -253,7 +308,7 @@ namespace MHServerEmu.Core.Serialization
                 }
                 else
                 {
-                    _bufferStream.WriteByteAt(_lastBitEncodedOffset, bitBuffer);
+                    _buffer.WriteByteAt(_lastBitEncodedOffset, bitBuffer);
                     if (numEncodedBits >= 5)
                         _lastBitEncodedOffset = 0;
                 }
@@ -606,7 +661,8 @@ namespace MHServerEmu.Core.Serialization
 
             if (IsPacking)
             {
-                return WriteVarint(ioData);
+                WriteVarint(ioData);
+                UpdateSizeInArchive();
             }
             else
             {
@@ -633,7 +689,8 @@ namespace MHServerEmu.Core.Serialization
 
             if (IsPacking)
             {
-                return WriteVarint(ioData);
+                WriteVarint(ioData);
+                UpdateSizeInArchive();
             }
             else
             {
@@ -675,7 +732,7 @@ namespace MHServerEmu.Core.Serialization
         /// </summary>
         private bool StartSizeChecking(ref long startPosition, ref uint size)
         {
-            if (IsPersistent == false || Version < ArchiveVersion.AddedMissions)
+            if (IsPersistent == false)
                 return true;
 
             // NOTE: COS/CIS are buffered, so we need to use their position, and not the one from the underlying stream.
@@ -701,7 +758,7 @@ namespace MHServerEmu.Core.Serialization
         /// </summary>
         private bool EndSizeChecking(ref long startPosition, ref uint size, bool skip)
         {
-            if (IsPersistent == false || Version < ArchiveVersion.AddedMissions)
+            if (IsPersistent == false)
                 return true;
 
             if (IsPacking)
@@ -729,6 +786,40 @@ namespace MHServerEmu.Core.Serialization
             return true;
         }
 
+        private bool UpdateSizeInArchive()
+        {
+            if (IsPersistent == false)
+                return false;
+
+            if (IsPacking == false)
+            {
+                SetError("Cant use on unpack!");
+                return false;
+            }
+
+            Span<uint> sizeToken = GetSizeTokenAtOffset(0);
+            if (sizeToken.Length == 0)
+            {
+                SetError("Error accessing size in the buffer!");
+                return false;
+            }
+
+            sizeToken[0] = (uint)CurrentOffset;
+            return true;
+        }
+
+        private Span<uint> GetSizeTokenAtOffset(uint offset)
+        {
+            if (CurrentOffset < offset + sizeof(uint))
+            {
+                SetError("Failed writing size in use!");
+                return default;
+            }
+
+            Span<byte> sizeToken = new(_buffer.GetBuffer(), (int)offset, sizeof(uint));
+            return MemoryMarshal.Cast<byte, uint>(sizeToken);
+        }
+
         #endregion
 
         #region Stream IO
@@ -740,6 +831,9 @@ namespace MHServerEmu.Core.Serialization
         {
             _cos.WriteRawByte(value);
             _cos.Flush();
+
+            UpdateSizeInArchive();
+
             return true;
         }
 
@@ -770,6 +864,9 @@ namespace MHServerEmu.Core.Serialization
                 _cos.WriteRawByte(@byte);
 
             _cos.Flush();
+
+            UpdateSizeInArchive();
+            
             return true;
         }
 
@@ -806,7 +903,7 @@ namespace MHServerEmu.Core.Serialization
             // NOTE: PropertyCollection::serializeWithDefault() manipulates the archive buffer directly. First it allocates 4 bytes
             // for the number of properties, than it writes all the properties, and then it goes back and updates the number.
             // NOTE2: Persistent archives also do this for all ISerialize objects, except it writes the number of bytes written.
-            return _bufferStream.WriteUInt32At(position, value);
+            return _buffer.WriteUInt32At(position, value);
         }
 
         /// <summary>
@@ -921,7 +1018,7 @@ namespace MHServerEmu.Core.Serialization
         {
             if (_lastBitEncodedOffset == 0) return null;
 
-            if (_bufferStream.ReadByteAt(_lastBitEncodedOffset, out byte lastBitEncoded) == false)
+            if (_buffer.ReadByteAt(_lastBitEncodedOffset, out byte lastBitEncoded) == false)
             {
                 SetError("Failed getting last bit encoded!");
                 return null;
@@ -975,32 +1072,6 @@ namespace MHServerEmu.Core.Serialization
             _encodedBitsRead++;
 
             return true;
-        }
-
-        #endregion
-
-        #region IDisposable Implementation
-
-        private bool _isDisposed;
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (_isDisposed) return;
-
-            if (disposing)
-            {
-                // Not sure if we even still need IDisposable for archives with reusable streams,
-                // we can just rely on doing cleanup after the previous use in the constructor.
-                _bufferStream.SetLength(0);
-            }
-
-            _isDisposed = true;
         }
 
         #endregion

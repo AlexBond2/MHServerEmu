@@ -1,8 +1,8 @@
-﻿using System.Text;
+﻿using System.Runtime.CompilerServices;
+using System.Text;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
-using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Serialization;
 using MHServerEmu.Core.VectorMath;
 using MHServerEmu.Games.Common;
@@ -50,36 +50,33 @@ namespace MHServerEmu.Games.Entities.Locomotion
     /// <summary>
     /// Represents state of a <see cref="Locomotor"/>.
     /// </summary>
-    public class LocomotionState : IPoolable, IDisposable
+    public struct LocomotionState
     {
-        // TODO: For optimization reasons it may be a good idea to change this to a struct.
-        // However, it is going to be large + mutable + have a reference type as one of its
-        // fields (List<NaviPathNode>), so this should be done with care and only if actually needed.
-
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        // NOTE: Due to how LocomotionState serialization is implemented, we should be able to
-        // get away with using C# auto properties instead of private fields.
-        public LocomotionFlags LocomotionFlags { get; set; }
-        public LocomotorMethod Method { get; set; } = LocomotorMethod.Default;
-        public float BaseMoveSpeed { get; set; }
-        public int Height { get; set; }
-        public ulong FollowEntityId { get; set; }
-        public float FollowEntityRangeStart { get; set; }
-        public float FollowEntityRangeEnd { get; set; }
-        public int PathGoalNodeIndex { get; set; }
-        public List<NaviPathNode> PathNodes { get; set; } = new();
+        public static ref LocomotionState Null { get => ref Unsafe.NullRef<LocomotionState>(); }
 
-        public bool IsInPool { get; set; }
+        public LocomotionFlags LocomotionFlags;
+        public LocomotorMethod Method = LocomotorMethod.Default;
+        public float BaseMoveSpeed;
+        public int Height;
+        public ulong FollowEntityId;
+        public float FollowEntityRangeStart;
+        public float FollowEntityRangeEnd;
+        public int PathGoalNodeIndex;
+        public readonly List<NaviPathNode> PathNodes;
 
-        public LocomotionState() { }
-
-        public LocomotionState(LocomotionState other)
+        public LocomotionState()
         {
-            Set(other);
+            PathNodes = new();
         }
 
-        public void Set(LocomotionState other)
+        public LocomotionState(List<NaviPathNode> pathNodes)
+        {
+            PathNodes = pathNodes;
+        }
+
+        public void Set(ref LocomotionState other)
         {
             LocomotionFlags = other.LocomotionFlags;
             Method = other.Method;
@@ -90,27 +87,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
             FollowEntityRangeEnd = other.FollowEntityRangeEnd;
             PathGoalNodeIndex = other.PathGoalNodeIndex;
 
-            // NOTE: Is it okay to add path nodes here by reference? Do we need a copy?
-            // Review this if/when we change NaviPathNode to struct.
             PathNodes.Set(other.PathNodes);
-        }
-
-        public void ResetForPool()
-        {
-            LocomotionFlags = default;
-            Method = LocomotorMethod.Default;
-            BaseMoveSpeed = default;
-            Height = default;
-            FollowEntityId = default;
-            FollowEntityRangeStart = default;
-            FollowEntityRangeEnd = default;
-            PathGoalNodeIndex = default;
-            PathNodes.Clear();
-        }
-
-        public void Dispose()
-        {
-            ObjectPoolManager.Instance.Return(this);
         }
 
         public override string ToString()
@@ -129,6 +106,11 @@ namespace MHServerEmu.Games.Entities.Locomotion
             return sb.ToString();
         }
 
+        public static bool IsNull(ref LocomotionState locomotionState)
+        {
+            return Unsafe.IsNullRef(ref locomotionState);
+        }
+
         // NOTE: LocomotionState serialization implementation is similar to what PowerCollection is doing
         // (i.e. separate static serialization methods for serialization and deserialization rather than
         // combined ISerialize implementation we have seen in most other cases).
@@ -136,7 +118,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// <summary>
         /// Serializes a <see cref="NaviPathNode"/> to the provided <see cref="Archive"/>.
         /// </summary>
-        public static bool SerializeTo(Archive archive, NaviPathNode pathNode, Vector3 previousVertex)
+        public static bool SerializeTo(Archive archive, ref NaviPathNode pathNode, Vector3 previousVertex)
         {
             bool success = true;
 
@@ -155,7 +137,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// <summary>
         /// Deserializes a <see cref="NaviPathNode"/> from the provided <see cref="Archive"/>.
         /// </summary>
-        public static bool SerializeFrom(Archive archive, NaviPathNode pathNode, Vector3 previousVertex)
+        public static bool SerializeFrom(Archive archive, ref NaviPathNode pathNode, Vector3 previousVertex)
         {
             bool success = true;
 
@@ -190,7 +172,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// Serializes <see cref="LocomotionState"/> to the provided <see cref="Archive"/>
         /// given the specified <see cref="LocomotionMessageFlags"/>.
         /// </summary>
-        public static bool SerializeTo(Archive archive, LocomotionState state, LocomotionMessageFlags flags)
+        public static bool SerializeTo(Archive archive, ref LocomotionState state, LocomotionMessageFlags flags)
         {
             bool success = true;
 
@@ -245,9 +227,9 @@ namespace MHServerEmu.Games.Entities.Locomotion
                 if (pathNodeCount > 0)
                 {
                     Vector3 previousVertex = Vector3.Zero;
-                    foreach (NaviPathNode pathNode in state.PathNodes)
+                    foreach (ref NaviPathNode pathNode in state.PathNodes.AsSpan())
                     {
-                        success &= SerializeTo(archive, pathNode, previousVertex);
+                        success &= SerializeTo(archive, ref pathNode, previousVertex);
                         previousVertex = pathNode.Vertex;
                     }
                 }
@@ -260,7 +242,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// Deserializes <see cref="LocomotionState"/> from the provided <see cref="Archive"/>
         /// given the specified <see cref="LocomotionMessageFlags"/>.
         /// </summary>
-        public static bool SerializeFrom(Archive archive, LocomotionState state, LocomotionMessageFlags flags)
+        public static bool SerializeFrom(Archive archive, ref LocomotionState state, LocomotionMessageFlags flags)
         {
             bool success = true;
 
@@ -344,7 +326,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
                     for (uint i = 0; i < pathNodeCount; i++)
                     {
                         NaviPathNode pathNode = new();
-                        success &= SerializeFrom(archive, pathNode, previousVertex);
+                        success &= SerializeFrom(archive, ref pathNode, previousVertex);
                         previousVertex = pathNode.Vertex;
                         state.PathNodes.Add(pathNode);
                     }
@@ -362,13 +344,14 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// <summary>
         /// Compares two <see cref="LocomotionState"/> instances and returns <see cref="LocomotionMessageFlags"/> for serialization.
         /// </summary>
-        public static LocomotionMessageFlags GetFieldFlags(LocomotionState currentState, LocomotionState previousState, bool withPathNodes)
+        public static LocomotionMessageFlags GetFieldFlags(ref LocomotionState currentState, ref LocomotionState previousState, bool withPathNodes)
         {
-            if (currentState == null) return LocomotionMessageFlags.NoLocomotionState;
+            if (IsNull(ref currentState))
+                return LocomotionMessageFlags.NoLocomotionState;
 
             LocomotionMessageFlags flags = LocomotionMessageFlags.None;
 
-            if (previousState != null)
+            if (IsNull(ref previousState) == false)
             {
                 // If we have a previous state, it means we are sending a relative update that contains only what has changed
                 flags |= LocomotionMessageFlags.RelativeToPreviousState;
@@ -437,9 +420,9 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// <summary>
         /// Compares two <see cref="LocomotionState"/> instances and returns whether or not sync is required.
         /// </summary>
-        public static void CompareLocomotionStatesForSync(LocomotionState newState, LocomotionState oldState, out bool syncRequired, out bool pathNodeSyncRequired, bool skipGoalNode)
+        public static void CompareLocomotionStatesForSync(ref LocomotionState newState, ref LocomotionState oldState, out bool syncRequired, out bool pathNodeSyncRequired, bool skipGoalNode)
         {
-            pathNodeSyncRequired = CompareLocomotionPathNodesForSync(newState, oldState, skipGoalNode);
+            pathNodeSyncRequired = CompareLocomotionPathNodesForSync(ref newState, ref oldState, skipGoalNode);
 
             syncRequired = newState.LocomotionFlags != oldState.LocomotionFlags;
             syncRequired |= newState.BaseMoveSpeed != oldState.BaseMoveSpeed;
@@ -454,7 +437,7 @@ namespace MHServerEmu.Games.Entities.Locomotion
         /// Compares <see cref="NaviPathNode"/> collections of two <see cref="LocomotionState"/> instances
         /// and returns <see langword="true"/> if an update is required.
         /// </summary>
-        public static bool CompareLocomotionPathNodesForSync(LocomotionState newState, LocomotionState oldState, bool skipGoalNode)
+        public static bool CompareLocomotionPathNodesForSync(ref LocomotionState newState, ref LocomotionState oldState, bool skipGoalNode)
         {
             if ((newState.LocomotionFlags.HasFlag(LocomotionFlags.IsLocomoting) ^ oldState.LocomotionFlags.HasFlag(LocomotionFlags.IsLocomoting))
                 || (newState.LocomotionFlags.HasFlag(LocomotionFlags.IsLooking) ^ oldState.LocomotionFlags.HasFlag(LocomotionFlags.IsLooking)))
@@ -473,13 +456,15 @@ namespace MHServerEmu.Games.Entities.Locomotion
                 int nodesRemaining = newState.PathNodes.Count - newState.PathGoalNodeIndex;
                 int newNodeIndex = newState.PathGoalNodeIndex;
                 int oldNodeIndex = oldState.PathNodes.Count - nodesRemaining;
-                if (skipGoalNode) --nodesRemaining;
+                if (skipGoalNode)
+                    --nodesRemaining;
 
                 for (int i = 0; i < nodesRemaining; ++i)
                 {
-                    if (newState.PathNodes[newNodeIndex + i].VertexSide != oldState.PathNodes[oldNodeIndex + i].VertexSide
-                    || newState.PathNodes[newNodeIndex + i].Radius != oldState.PathNodes[oldNodeIndex + i].Radius
-                    || newState.PathNodes[newNodeIndex + i].Vertex != oldState.PathNodes[oldNodeIndex + i].Vertex)
+                    ref NaviPathNode newNode = ref newState.PathNodes.AsSpan()[newNodeIndex + i];
+                    ref NaviPathNode oldNode = ref oldState.PathNodes.AsSpan()[oldNodeIndex + i];
+
+                    if (newNode.VertexSide != oldNode.VertexSide || newNode.Radius != oldNode.Radius || newNode.Vertex != oldNode.Vertex)
                         return true;
                 }
             }

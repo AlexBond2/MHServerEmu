@@ -102,7 +102,7 @@ namespace MHServerEmu.Games.Powers
             return Eval.RunBool(powerProto.EvalCanTrigger, evalContext);
         }
 
-        public PowerPositionSweepResult PowerPositionSweep(RegionLocation regionLocation, Vector3 targetPosition, ulong targetId,
+        public PowerPositionSweepResult PowerPositionSweep(ref RegionLocation regionLocation, Vector3 targetPosition, ulong targetId,
             ref Vector3? resultPosition, bool forceDoNotMoveToExactTargetLocation = false, float rangeOverride = 0f)
         {
             if (Owner == null) return Logger.WarnReturn(PowerPositionSweepResult.Error, "PowerPositionSweep(): Owner == null");
@@ -127,7 +127,7 @@ namespace MHServerEmu.Games.Powers
 
                     Vector3 findPoint = resultPosition.Value;
                     PointOnLineResult result = region.NaviMesh.FindPointOnLineToOccupy(ref findPoint, regionLocation.Position, targetPosition, range,
-                        Owner.Bounds, locomotor.PathFlags, movementPowerProto.BlockingCheckFlags, doNotMoveToExactTargetLocation);
+                        ref Owner.Bounds, locomotor.PathFlags, movementPowerProto.BlockingCheckFlags, doNotMoveToExactTargetLocation);
                     resultPosition = findPoint;
 
                     return result switch
@@ -140,12 +140,12 @@ namespace MHServerEmu.Games.Powers
                 }
             }
 
-            return PowerPositionSweepInternal(regionLocation, targetPosition, targetId, ref resultPosition, false, false);
+            return PowerPositionSweepInternal(ref regionLocation, targetPosition, targetId, ref resultPosition, false, false);
         }
 
-        public bool PowerLOSCheck(RegionLocation regionLocation, Vector3 targetPosition, ulong targetId, ref Vector3? resultPosition, bool losCheckAlongGround)
+        public bool PowerLOSCheck(ref RegionLocation regionLocation, Vector3 targetPosition, ulong targetId, ref Vector3? resultPosition, bool losCheckAlongGround)
         {
-            PowerPositionSweepResult result = PowerPositionSweepInternal(regionLocation, targetPosition, targetId, ref resultPosition, true, losCheckAlongGround);
+            PowerPositionSweepResult result = PowerPositionSweepInternal(ref regionLocation, targetPosition, targetId, ref resultPosition, true, losCheckAlongGround);
 
             if (result == PowerPositionSweepResult.Clipped)
                 return Vector3.DistanceSquared(targetPosition, resultPosition.Value) <= PowerPositionSweepPaddingSquared;
@@ -844,7 +844,7 @@ namespace MHServerEmu.Games.Powers
             return IsInRangeInternal(powerProto, range, userPosition, userRadius, targetPosition, RangeCheckType.Application, targetRadius);
         }
 
-        private PowerPositionSweepResult PowerPositionSweepInternal(RegionLocation regionLocation, Vector3 targetPosition,
+        private PowerPositionSweepResult PowerPositionSweepInternal(ref RegionLocation regionLocation, Vector3 targetPosition,
             ulong targetId, ref Vector3? resultPosition, bool losCheck, bool losCheckAlongGround)
         {
             if (Owner == null) return Logger.WarnReturn(PowerPositionSweepResult.Error, "PowerPositionSweepInternal(): Owner == null");
@@ -882,7 +882,7 @@ namespace MHServerEmu.Games.Powers
                 bool doNotMoveToExactTargetLocation = movementPowerProto.MoveToExactTargetLocation == false;
 
                 PointOnLineResult pointOnLineResult = naviMesh.FindPointOnLineToOccupy(ref toPosition, fromPosition, toPosition, GetRange(),
-                    Owner.Bounds, locomotor.PathFlags, movementPowerProto.BlockingCheckFlags, doNotMoveToExactTargetLocation);
+                    ref Owner.Bounds, locomotor.PathFlags, movementPowerProto.BlockingCheckFlags, doNotMoveToExactTargetLocation);
 
                 if (pointOnLineResult == PointOnLineResult.Failed)
                     return PowerPositionSweepResult.TargetPositionInvalid;
@@ -987,7 +987,7 @@ namespace MHServerEmu.Games.Powers
                     if (movementPowerProto.IsHighFlyingPower == false && movementPowerProto.MovementHeightBonus == 0)
                         blockFlags |= 1 << (int)BoundsMovementPowerBlockType.Ground;
 
-                    WorldEntity firstHitEntity = region.SweepToFirstHitEntity(Owner.Bounds, resultPosition.Value - fromPosition,
+                    WorldEntity firstHitEntity = region.SweepToFirstHitEntity(ref Owner.Bounds, resultPosition.Value - fromPosition,
                         ref resultPosition, new MovementPowerEntityCollideFunc(blockFlags));
 
                     if (firstHitEntity != null)

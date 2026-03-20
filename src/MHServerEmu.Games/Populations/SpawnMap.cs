@@ -202,7 +202,10 @@ namespace MHServerEmu.Games.Populations
             int oldHeatMax = _heatMax;
 
             var manager = Area.Region.PopulationManager;
-            var zones = manager.IterateBlackOutZoneInVolume(Area.RegionBounds).ToArray();
+
+            using var zonesHandle = ListPool<BlackOutZone>.Instance.Get(out List<BlackOutZone> zones);
+            foreach (BlackOutZone zone in manager.IterateBlackOutZoneInVolume(Area.RegionBounds))
+                zones.Add(zone);
 
             float spawnRadius = Resolution / 2.0f;
             var center = Area.RegionBounds.Min + new Vector3(spawnRadius, spawnRadius, 0.0f);
@@ -295,7 +298,7 @@ namespace MHServerEmu.Games.Populations
             float dencity;
 
             int playerCount = Area.PopulationArea.PlayerCount;
-            int playerLimit = Area.Region.Prototype.PlayerLimit;
+            int playerLimit = Area.Region.Prototype.GetPlayerLimit();
 
             if (DensityMin == DensityMax)
             {
@@ -324,7 +327,7 @@ namespace MHServerEmu.Games.Populations
             var region = Area.Region;
             List<WorldEntity> entities = new(256);
             var volume = new Sphere(position, CrowdSupressionRadius);
-            region.GetEntitiesInVolume(entities, volume, new(EntityRegionSPContextFlags.ActivePartition));
+            region.GetEntitiesInVolume(entities, volume, new(EntityRegionSPContextFlags.PrimaryPartition));
 
             int crowdSize = 0;
             bool hasPlayer = false;

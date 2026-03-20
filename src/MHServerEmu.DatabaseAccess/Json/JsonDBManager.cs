@@ -67,6 +67,7 @@ namespace MHServerEmu.DatabaseAccess.Json
         public bool TryQueryAccountByEmail(string email, out DBAccount account)
         {
             account = _account;
+            account.MigrationData.Reset();
             return true;
         }
 
@@ -85,6 +86,12 @@ namespace MHServerEmu.DatabaseAccess.Json
 
         public bool GetPlayerNames(Dictionary<ulong, string> playerNames)
         {
+            return false;
+        }
+
+        public bool TryGetLastLogoutTime(ulong playerDbId, out long lastLogoutTime)
+        {
+            lastLogoutTime = 0;
             return false;
         }
 
@@ -116,6 +123,37 @@ namespace MHServerEmu.DatabaseAccess.Json
 
             return true;
         }
+
+        #region Guilds
+
+        // TODO: Guilds are currently not supported by the JSON backend.
+
+        public bool LoadGuilds(List<DBGuild> guilds)
+        {
+            return true;
+        }
+
+        public bool SaveGuild(DBGuild guild)
+        {
+            return true;
+        }
+
+        public bool DeleteGuild(DBGuild guild)
+        {
+            return true;
+        }
+
+        public bool SaveGuildMember(DBGuildMember guildMember)
+        {
+            return true;
+        }
+
+        public bool DeleteGuildMember(DBGuildMember guildMember)
+        {
+            return true;
+        }
+
+        #endregion
 
         /// <summary>
         /// Creates a backup of the account file if enough time has passed since the last one.

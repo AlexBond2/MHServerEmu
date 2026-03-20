@@ -1,8 +1,7 @@
 ﻿using MHServerEmu.Core.Logging;
 using MHServerEmu.DatabaseAccess;
-using MHServerEmu.PlayerManagement.Players;
 
-namespace MHServerEmu.PlayerManagement.Social
+namespace MHServerEmu.PlayerManagement.Players
 {
     public class PlayerNameCache
     {

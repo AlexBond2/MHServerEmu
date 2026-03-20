@@ -292,7 +292,7 @@ namespace MHServerEmu.Games.Loot
             if (worldEntityProto.GetCurrency(out PrototypeId currencyRef, out int amount) == false)
                 return LootRollResult.Failure;
 
-            amount = _context.ScaleCurrency(currencyRef, amount * stackCount);
+            amount = _context.ScaleCurrency(currencyRef, amount * stackCount, dropChanceModifiers);
             CurrencySpec currencySpec = new(worldEntityProto.DataRef, currencyRef, amount);
             LootResult lootResult = new(currencySpec);
             _pendingItemList.Add(new(lootResult));
@@ -337,7 +337,7 @@ namespace MHServerEmu.Games.Loot
             using DropFilterArguments filterArgs = ObjectPoolManager.Instance.Get<DropFilterArguments>();
             DropFilterArguments.Initialize(filterArgs, LootContext);
 
-            List<RarityEntry> rarityEntryList = ListPool<RarityEntry>.Instance.Get();
+            using var rarityEntryListHandle = ListPool<RarityEntry>.Instance.Get(out List<RarityEntry> rarityEntryList);
             float weightSum = 0f;
 
             foreach (PrototypeId rarityProtoRef in DataDirectory.Instance.IteratePrototypesInHierarchy<RarityPrototype>(PrototypeIterateFlags.NoAbstractApprovedOnly))
@@ -375,7 +375,6 @@ namespace MHServerEmu.Games.Loot
                 pickedRarityProtoRef = rarityPicker.Pick();
             }
 
-            ListPool<RarityEntry>.Instance.Return(rarityEntryList);
             return pickedRarityProtoRef;
         }
 

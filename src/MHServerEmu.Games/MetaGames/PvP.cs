@@ -1,4 +1,5 @@
-﻿using Gazillion;
+﻿using System.Text;
+using Gazillion;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Memory;
 using MHServerEmu.Core.Serialization;
@@ -10,20 +11,19 @@ using MHServerEmu.Games.Network;
 using MHServerEmu.Games.Properties;
 using MHServerEmu.Games.Properties.Evals;
 using MHServerEmu.Games.Regions;
-using System.Text;
 
 namespace MHServerEmu.Games.MetaGames
 {
     public class PvP : MetaGame
     {
-
-        private Dictionary<ulong, PropertyCollection> _playersCollection = [];
+        private readonly HashSet<ulong> _players = new();
 
         private RepVar_int _team1 = new();
         private RepVar_int _team2 = new();
 
         public PvPPrototype PvPPrototype { get => Prototype as PvPPrototype; }
         public ScoreTable PvPScore { get; private set; }
+
         public PvP(Game game) : base(game) { }
 
         public override bool Initialize(EntitySettings settings)
@@ -40,9 +40,6 @@ namespace MHServerEmu.Games.MetaGames
             }
 
             CreateGameModes(pvpProto.GameModes);
-
-            // foreach (var player in new PlayerIterator(Region))
-            //    player.RevealDiscoveryMap();
 
             return true;
         }
@@ -66,9 +63,13 @@ namespace MHServerEmu.Games.MetaGames
         public override bool Serialize(Archive archive)
         {
             bool success = base.Serialize(archive);
-            // if (archive.IsTransient)
-            success &= Serializer.Transfer(archive, ref _team1);
-            success &= Serializer.Transfer(archive, ref _team2);
+
+            if (archive.IsTransient)
+            {
+                success &= Serializer.Transfer(archive, ref _team1);
+                success &= Serializer.Transfer(archive, ref _team2);
+            }
+
             return success;
         }
 
@@ -106,7 +107,25 @@ namespace MHServerEmu.Games.MetaGames
         {
             if (base.AddPlayer(player) == false) return false;
 
-            UpdatePlayerCollection(player);
+            // Do not apply this to regions that use PvP metagames that are not PvP (e.g. The Raft).
+            if (PvPPrototype.IsPvP && _players.Add(player.DatabaseUniqueId))
+            {
+                var avatarProperties = player.CurrentAvatar?.Properties;
+                if (avatarProperties != null)
+                {
+                    avatarProperties.AdjustProperty(1, PropertyEnum.PvPMatchCount);
+
+                    // not used
+                    // PvPDamageBoostForKDPct.curve table set to 1.0
+                    // PvPDamageReductionForKDPct.curve table set to 0.0
+                    /*
+                    avatarProperties[PropertyEnum.PvPRecentKDRatio] = 0.0f;
+                    avatarProperties[PropertyEnum.PvPLastMatchIndex] = newMatch;
+                    avatarProperties[PropertyEnum.PvPKillsDuringMatch, newMatch] = 0;
+                    avatarProperties[PropertyEnum.PvPDeathsDuringMatch, newMatch] = 0;
+                    */
+                }
+            }
 
             if (PvPPrototype.EvalOnPlayerAdded != null)
             {
@@ -131,42 +150,9 @@ namespace MHServerEmu.Games.MetaGames
             foreach (var state in MetaStates)
                 state.OnAddPlayer(player);
 
-            // player.RevealDiscoveryMap();
-
             player.Properties[PropertyEnum.PvPMode] = mode.PrototypeDataRef;
 
             return true;
-        }
-
-        private void UpdatePlayerCollection(Player player)
-        {
-            if (!_playersCollection.TryGetValue(player.DatabaseUniqueId, out PropertyCollection collection))
-            {
-                collection = new();
-                _playersCollection[player.DatabaseUniqueId] = collection;
-            }
-
-            if (collection.IsEmpty)
-            {
-                var avatarProperties = player.CurrentAvatar?.Properties;
-                if (avatarProperties == null) return;
-
-                avatarProperties.AdjustProperty(1, PropertyEnum.PvPMatchCount);
-
-                // not used
-                // PvPDamageBoostForKDPct.curve table set to 1.0
-                // PvPDamageReductionForKDPct.curve table set to 0.0
-                /*
-                avatarProperties[PropertyEnum.PvPRecentKDRatio] = 0.0f;
-                avatarProperties[PropertyEnum.PvPLastMatchIndex] = newMatch;
-                avatarProperties[PropertyEnum.PvPKillsDuringMatch, newMatch] = 0;
-                avatarProperties[PropertyEnum.PvPDeathsDuringMatch, newMatch] = 0;
-                */
-            }
-            else
-            {
-                player.AvatarProperties.FlattenCopyFrom(collection, false);
-            }
         }
 
         public override bool RemovePlayer(Player player)

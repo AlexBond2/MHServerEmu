@@ -53,6 +53,7 @@ namespace MHServerEmu.WebFrontend
             if (config.EnableWebApi)
             {
                 InitializeWebBackend();
+                WebApiKeyManager.Instance.LoadKeys();
 
                 if (config.EnableDashboard)
                     InitializeWebDashboard(config.DashboardFileDirectory, config.DashboardUrlPath);
@@ -119,7 +120,13 @@ namespace MHServerEmu.WebFrontend
 
         private void InitializeWebBackend()
         {
-            _webService.RegisterHandler("/AccountManagement/Create", new AccountCreateWebHandler());
+            _webService.RegisterHandler("/AccountManagement/Create",        new AccountCreateWebHandler());
+            _webService.RegisterHandler("/AccountManagement/SetPlayerName", new AccountSetPlayerNameWebHandler());
+            _webService.RegisterHandler("/AccountManagement/SetPassword",   new AccountSetPasswordWebHandler());
+            _webService.RegisterHandler("/AccountManagement/SetUserLevel",  new AccountSetUserLevelWebHandler());
+            _webService.RegisterHandler("/AccountManagement/SetFlag",       new AccountSetFlagWebHandler());
+            _webService.RegisterHandler("/AccountManagement/ClearFlag",     new AccountClearFlagWebHandler());
+
             _webService.RegisterHandler("/ServerStatus", new ServerStatusWebHandler());
             _webService.RegisterHandler("/RegionReport", new RegionReportWebHandler());
             _webService.RegisterHandler("/Metrics/Performance", new MetricsPerformanceWebHandler());
@@ -162,13 +169,15 @@ namespace MHServerEmu.WebFrontend
             }
 
             // Register other files.
-            foreach (string filePath in Directory.GetFiles(dashboardDirectory))
+            foreach (string filePath in Directory.GetFiles(dashboardDirectory, "*", SearchOption.AllDirectories))
             {
-                ReadOnlySpan<char> fileName = Path.GetFileName(filePath.AsSpan());
-                if (fileName.Equals("index.html", StringComparison.InvariantCultureIgnoreCase))
+                string relativeFilePath = Path.GetRelativePath(dashboardDirectory, filePath);
+
+                if (string.Equals(relativeFilePath, "index.html", StringComparison.InvariantCultureIgnoreCase))
                     continue;
 
-                string subFilePath = $"{localPath}{fileName}";
+                string subFilePath = $"{localPath}{relativeFilePath.Replace('\\', '/')}";
+
                 _webService.RegisterHandler(subFilePath, new StaticFileWebHandler(filePath));
                 _dashboardEndpoints.Add(subFilePath);
             }

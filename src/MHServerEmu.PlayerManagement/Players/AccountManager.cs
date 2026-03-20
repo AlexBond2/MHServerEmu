@@ -1,5 +1,4 @@
-﻿using System.Text.RegularExpressions;
-using Gazillion;
+﻿using Gazillion;
 using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Helpers;
 using MHServerEmu.Core.Logging;
@@ -28,7 +27,7 @@ namespace MHServerEmu.PlayerManagement.Players
     /// <summary>
     /// Provides <see cref="DBAccount"/> management functions.
     /// </summary>
-    public static partial class AccountManager
+    public static class AccountManager
     {
         private const int EmailMaxLength = 320;
         private const int PasswordMinLength = 3;
@@ -47,8 +46,7 @@ namespace MHServerEmu.PlayerManagement.Players
             IDBManager dbManager = IDBManager.Instance;
 
             // Try to query an account to check
-            string email = loginDataPB.EmailAddress.ToLower();
-            if (dbManager.TryQueryAccountByEmail(email, out DBAccount accountToCheck) == false)
+            if (dbManager.TryQueryAccountByEmail(loginDataPB.EmailAddress, out DBAccount accountToCheck) == false)
                 return AuthStatusCode.IncorrectUsernameOrPassword403;
 
             // Check the account we queried if our DB manager requires it
@@ -95,12 +93,15 @@ namespace MHServerEmu.PlayerManagement.Players
         {
             IDBManager dbManager = IDBManager.Instance;
 
+            email = email.ToLowerInvariant();
+
             // Validate input before doing database queries
             if (ValidateEmail(email) == false)
                 return AccountOperationResult.EmailInvalid;
 
-            if (ValidatePlayerName(playerName) == false)
-                return AccountOperationResult.PlayerNameInvalid;
+            AccountOperationResult playerNameResult = ValidatePlayerName(playerName);
+            if (playerNameResult != AccountOperationResult.Success)
+                return playerNameResult;
 
             if (ValidatePassword(password) == false)
                 return AccountOperationResult.PasswordInvalid;
@@ -117,6 +118,7 @@ namespace MHServerEmu.PlayerManagement.Players
             if (dbManager.InsertAccount(account) == false)
                 return AccountOperationResult.DatabaseError;
 
+            Logger.Info($"CreateAccount(): account=[{account}]");
             return AccountOperationResult.Success;
         }
 
@@ -129,9 +131,9 @@ namespace MHServerEmu.PlayerManagement.Players
         {
             IDBManager dbManager = IDBManager.Instance;
 
-            // Validate input before doing database queries
-            if (ValidatePlayerName(newPlayerName) == false)
-                return AccountOperationResult.PlayerNameInvalid;
+            AccountOperationResult playerNameResult = ValidatePlayerName(newPlayerName);
+            if (playerNameResult != AccountOperationResult.Success)
+                return playerNameResult;
 
             if (dbManager.TryQueryAccountByEmail(email, out DBAccount account) == false)
                 return AccountOperationResult.EmailNotFound;
@@ -148,6 +150,7 @@ namespace MHServerEmu.PlayerManagement.Players
             ServerManager.Instance.SendMessageToService(GameServiceType.PlayerManager, playerNameChanged);
             ServerManager.Instance.SendMessageToService(GameServiceType.GroupingManager, playerNameChanged);
 
+            Logger.Info($"ChangeAccountPlayerName(): account=[{account}], oldPlayerName={oldPlayerName}");
             return AccountOperationResult.Success;
         }
 
@@ -165,11 +168,12 @@ namespace MHServerEmu.PlayerManagement.Players
             if (dbManager.TryQueryAccountByEmail(email, out DBAccount account) == false)
                 return AccountOperationResult.EmailNotFound;
 
-            // Update the password and write the new hash/salt to the database
             account.PasswordHash = CryptographyHelper.HashPassword(newPassword, out byte[] salt);
             account.Salt = salt;
             account.Flags &= ~AccountFlags.IsPasswordExpired;
             dbManager.UpdateAccount(account);
+
+            Logger.Info($"ChangeAccountPassword(): account=[{account}]");
             return AccountOperationResult.Success;
         }
 
@@ -184,9 +188,10 @@ namespace MHServerEmu.PlayerManagement.Players
             if (dbManager.TryQueryAccountByEmail(email, out DBAccount account) == false)
                 return AccountOperationResult.EmailNotFound;
 
-            // Write the new user level to the database
             account.UserLevel = userLevel;
             dbManager.UpdateAccount(account);
+
+            Logger.Info($"SetAccountUserLevel(): account=[{account}], userLevel=[{userLevel}]");
             return AccountOperationResult.Success;
         }
 
@@ -209,10 +214,10 @@ namespace MHServerEmu.PlayerManagement.Players
             if (account.Flags.HasFlag(flag))
                 return AccountOperationResult.FlagAlreadySet;
 
-            // Update flags and write to the database
-            Logger.Trace($"Setting flag {flag} for account {account}");
             account.Flags |= flag;
             IDBManager.Instance.UpdateAccount(account);
+
+            Logger.Info($"SetFlag(): account=[{account}], flag=[{flag}]");
             return AccountOperationResult.Success;
         }
 
@@ -235,10 +240,10 @@ namespace MHServerEmu.PlayerManagement.Players
             if (account.Flags.HasFlag(flag) == false)
                 return AccountOperationResult.FlagNotSet;
 
-            // Update flags and write to the database
-            Logger.Trace($"Clearing flag {flag} for account {account}");
             account.Flags &= ~flag;
             IDBManager.Instance.UpdateAccount(account);
+
+            Logger.Info($"ClearFlag(): account=[{account}], flag=[{flag}]");
             return AccountOperationResult.Success;
         }
 
@@ -299,9 +304,9 @@ namespace MHServerEmu.PlayerManagement.Players
         /// <summary>
         /// Returns <see langword="true"/> if the provided player name <see cref="string"/> is valid.
         /// </summary>
-        private static bool ValidatePlayerName(string playerName)
+        private static AccountOperationResult ValidatePlayerName(string playerName)
         {
-            return GetPlayerNameRegex().Match(playerName).Success;    // 1-16 alphanumeric characters
+            return PlayerNameValidator.Instance.ValidatePlayerName(playerName);
         }
         
         /// <summary>
@@ -311,8 +316,5 @@ namespace MHServerEmu.PlayerManagement.Players
         {
             return password.Length.IsWithin(PasswordMinLength, PasswordMaxLength);
         }
-
-        [GeneratedRegex(@"^[a-zA-Z0-9]{1,16}$")]
-        private static partial Regex GetPlayerNameRegex();
     }
 }

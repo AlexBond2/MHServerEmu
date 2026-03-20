@@ -1,4 +1,5 @@
-﻿using MHServerEmu.Core.Extensions;
+﻿using Gazillion;
+using MHServerEmu.Core.Extensions;
 using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.Memory;
 using MHServerEmu.Games.Entities;
@@ -462,6 +463,11 @@ namespace MHServerEmu.Games.GameData.Prototypes
             return false;
         }
 
+        public int GetPlayerLimit()
+        {
+            return (int)(PlayerLimit * LiveTuningManager.GetLiveRegionTuningVar(this, RegionTuningVar.eRTV_PlayerLimit));
+        }
+
         private int GetLargestTeamSize()
         {
             int largestTeamSize = 0;
@@ -488,7 +494,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
             if (includeChildren)
             {
-                List<PrototypeId> parentRegions = ListPool<PrototypeId>.Instance.Get(regions);
+                using var parentRegionsHandle = ListPool<PrototypeId>.Instance.Get(regions, out List<PrototypeId> parentRegions);
                 foreach (var childRef in GameDatabase.DataDirectory.IteratePrototypesInHierarchy<RegionPrototype>(PrototypeIterateFlags.NoAbstractApprovedOnly))
                     foreach (var parentRef in parentRegions)
                         if (GameDatabase.DataDirectory.PrototypeIsAPrototype(childRef, parentRef))
@@ -496,14 +502,13 @@ namespace MHServerEmu.Games.GameData.Prototypes
                             regions.Add(childRef);
                             break;
                         }
-                ListPool<PrototypeId>.Instance.Return(parentRegions);
             }
 
             if (excludeRegions.HasValue())
                 foreach (var regionRef in excludeRegions)
                     regions.Remove(regionRef);
 
-            List<PrototypeId> altRegions = ListPool<PrototypeId>.Instance.Get(regions);
+            using var altRegionsHandle = ListPool<PrototypeId>.Instance.Get(regions, out List<PrototypeId> altRegions);
             foreach (var regionRef in altRegions)
             {
                 var regionProto = GameDatabase.GetPrototype<RegionPrototype>(regionRef);
@@ -511,7 +516,6 @@ namespace MHServerEmu.Games.GameData.Prototypes
                     foreach (var altRegionRef in regionProto.AltRegions)
                         regions.Add(altRegionRef);
             }
-            ListPool<PrototypeId>.Instance.Return(altRegions);
         }
 
         public static void GetAreasInGenerator(PrototypeId regionRef, HashSet<PrototypeId> areas)
@@ -522,10 +526,9 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
             if (regionProto.AreasInGenerator == null)
             {
-                regionProto.AreasInGenerator = [];
-                HashSet<PrototypeId> regions = HashSetPool<PrototypeId>.Instance.Get();
+                regionProto.AreasInGenerator = new();
+                using var regionsHandle = HashSetPool<PrototypeId>.Instance.Get(out HashSet<PrototypeId> regions);
                 GetAreasInGenerator(regionProto, regionProto.AreasInGenerator, regions);
-                HashSetPool<PrototypeId>.Instance.Return(regions);
             }
 
             if (regionProto.AreasInGenerator != null)

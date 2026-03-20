@@ -9,34 +9,44 @@ using MHServerEmu.Games.GameData;
 
 namespace MHServerEmu.Games.Entities.Persistence
 {
-    public static class PersistenceHelper
+    public static class PersistenceUtility
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        public static void StoreInventoryEntities(Player player, DBAccount dbAccount)
+        public static bool StoreInventoryEntities(Player player, DBAccount dbAccount)
         {
-            dbAccount.ClearEntities();
+            using DBAccount.EntityUpdateScope entityUpdateScope = dbAccount.BeginEntityUpdate();
 
-            StoreContainer(player, dbAccount, true);
-
-            foreach (Avatar avatar in new AvatarIterator(player))
+            try
             {
-                StoreContainer(avatar, dbAccount, true);
-            }
+                StoreContainer(player, dbAccount, true);
 
-            EntityManager entityManager = player.Game.EntityManager;
-
-            foreach (var entry in player.GetInventory(InventoryConvenienceLabel.TeamUpLibrary))
-            {
-                Agent teamUp = entityManager.GetEntity<Agent>(entry.Id);
-                if (teamUp == null)
+                foreach (Avatar avatar in new AvatarIterator(player))
                 {
-                    Logger.Warn("StoreInventoryEntities(): teamUp == null");
-                    continue;
+                    StoreContainer(avatar, dbAccount, true);
                 }
 
-                // Team-ups shouldn't have transferrable summons, but disabling it explicitly just in case.
-                StoreContainer(teamUp, dbAccount, false);
+                EntityManager entityManager = player.Game.EntityManager;
+
+                foreach (var entry in player.GetInventory(InventoryConvenienceLabel.TeamUpLibrary))
+                {
+                    Agent teamUp = entityManager.GetEntity<Agent>(entry.Id);
+                    if (teamUp == null)
+                    {
+                        Logger.Warn("StoreInventoryEntities(): teamUp == null");
+                        continue;
+                    }
+
+                    // Team-ups shouldn't have transferrable summons, but disabling it explicitly just in case.
+                    StoreContainer(teamUp, dbAccount, false);
+                }
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                Logger.ErrorException(e, $"StoreInventoryEntities(): Failed to store entities for player [{player}]");
+                return false;
             }
         }
 
@@ -72,6 +82,8 @@ namespace MHServerEmu.Games.Entities.Persistence
 
         private static bool StoreContainer(Entity container, DBAccount dbAccount, bool allowReplicateForTransfer)
         {
+            if (container == null) return Logger.WarnReturn(false, "StoreContainer(): container == null");
+
             foreach (Inventory inventory in new InventoryIterator(container))
             {
                 if (inventory.Prototype.PersistedToDatabase == false)
@@ -80,13 +92,13 @@ namespace MHServerEmu.Games.Entities.Persistence
                         continue;
                 }
 
-                StoreInventory(inventory, dbAccount);
+                StoreInventory(container, inventory, dbAccount);
             }
 
             return true;
         }
 
-        private static bool StoreInventory(Inventory inventory, DBAccount dbAccount)
+        private static bool StoreInventory(Entity container, Inventory inventory, DBAccount dbAccount)
         {
             if (inventory == null) return Logger.WarnReturn(false, "StoreInventory(): inventory == null");
 
@@ -113,8 +125,8 @@ namespace MHServerEmu.Games.Entities.Persistence
                 entities = dbAccount.Items;
             }
 
-            // Common data everything stored in this inventory
-            long containerDbGuid = (long)inventory.Owner.DatabaseUniqueId;
+            // Common data for everything stored in this inventory.
+            long containerDbGuid = (long)container.DatabaseUniqueId;
             long inventoryProtoGuid = (long)GameDatabase.GetPrototypeGuid(inventory.PrototypeDataRef);
 
             EntityManager entityManager = inventory.Game.EntityManager;
@@ -129,25 +141,15 @@ namespace MHServerEmu.Games.Entities.Persistence
                     continue;
                 }
 
-                DBEntity dbEntity = new();
-                dbEntity.DbGuid = (long)entity.DatabaseUniqueId;
-                dbEntity.ContainerDbGuid = containerDbGuid;
-                dbEntity.InventoryProtoGuid = inventoryProtoGuid;
-                dbEntity.Slot = entry.Slot;
-                dbEntity.EntityProtoGuid = (long)GameDatabase.GetPrototypeGuid(entity.PrototypeDataRef);
-
-                using (Archive archive = new(ArchiveSerializeType.Database))
+                using Archive archive = new(ArchiveSerializeType.Database);
+                if (Serializer.Transfer(archive, ref entity) == false)
                 {
-                    if (Serializer.Transfer(archive, ref entity) == false)
-                    {
-                        Logger.Error($"StoreInventory(): Failed to serialize entity {entity}");
-                        continue;
-                    }
-
-                    dbEntity.ArchiveData = archive.AccessAutoBuffer().ToArray();
+                    Logger.Error($"StoreInventory(): Failed to serialize entity {entity}");
+                    continue;
                 }
 
-                entities.Add(dbEntity);
+                entities.UpdateEntity((long)entity.DatabaseUniqueId, containerDbGuid, inventoryProtoGuid, entry.Slot,
+                    (long)GameDatabase.GetPrototypeGuid(entity.PrototypeDataRef), archive.AsSpan());
 
                 //Logger.Debug($"StoreInventory(): Archived entity {entity}");
             }

@@ -1,6 +1,4 @@
-﻿using System.Text;
-
-namespace MHServerEmu.Core.Logging
+﻿namespace MHServerEmu.Core.Logging
 {
     /// <summary>
     /// A timestamped log message.
@@ -8,8 +6,6 @@ namespace MHServerEmu.Core.Logging
     public readonly struct LogMessage
     {
         private const string TimeFormat = "yyyy.MM.dd HH:mm:ss.fff";
-
-        private static readonly StringBuilder StringBuilder = new();
 
         public DateTime Timestamp { get; }
         public LoggingLevel Level { get; }
@@ -36,26 +32,45 @@ namespace MHServerEmu.Core.Logging
 
         public override string ToString()
         {
-            return $"[{Timestamp.ToString(TimeFormat)}] [{Level,5}] [{Logger}] {Message}";
+            Span<char> formattedTimestamp = stackalloc char[TimeFormat.Length];
+            Timestamp.TryFormat(formattedTimestamp, out _, TimeFormat);
+            return $"[{formattedTimestamp}] [{Level,5}] [{Logger}] {Message}";
         }
 
         /// <summary>
         /// Returns a string that represents this <see cref="LogMessage"/> with or without a timestamp.
         /// </summary>
-        public string ToString(bool includeTimestamps)
+        public string ToString(bool includeTimestamp)
         {
-            lock (StringBuilder)    // This shouldn't be called from multiple threads unless in synchronous mode
+            if (includeTimestamp)
+                return ToString();
+
+            return $"[{Level,5}] [{Logger}] {Message}";
+        }
+
+        public void WriteTo(TextWriter writer, bool includeTimestamp, bool writeLine)
+        {
+            // TextWriter.Write() with format arguments causes less memory allocation than string interpolation as of .NET 8.
+            // We can't use this for our timestamp though because Span cannot be cast to an object.
+
+            // We can potentially make use of interpolated strings here without sacrificing performance with a custom InterpolatedStringHandler implementation.
+            // https://learn.microsoft.com/en-us/dotnet/csharp/advanced-topics/performance/interpolated-string-handler
+
+            if (includeTimestamp)
             {
-                if (includeTimestamps)
-                    StringBuilder.Append($"[{Timestamp.ToString(TimeFormat)}] ");
-
-                StringBuilder.Append($"[{Level,5}] [{Logger}] {Message}");
-
-                string str = StringBuilder.ToString();
-                StringBuilder.Clear();
-
-                return str;
+                Span<char> formattedTimestamp = stackalloc char[TimeFormat.Length];
+                Timestamp.TryFormat(formattedTimestamp, out _, TimeFormat);
+                writer.Write('[');
+                writer.Write(formattedTimestamp);
+                writer.Write(']');
+                writer.Write(' ');
             }
+
+            // Enum.GetName() doesn't allocate memory unlike ToString().
+            writer.Write("[{0,5}] [{1}] {2}", Enum.GetName(Level), Logger, Message);
+
+            if (writeLine)
+                writer.WriteLine();
         }
     }
 }

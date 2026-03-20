@@ -637,7 +637,8 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
             // Experience
             // Scale exp based on avatar level rather than orb level, but apply the delta from orb shrinkage.
-            if (orbProto.GetXPAwarded(avatar.CharacterLevel + levelDelta, out long xp, out long minXP, player.CanUseLiveTuneBonuses()))
+            int expLevel = Math.Max(avatar.CharacterLevel + levelDelta, 1);
+            if (orbProto.GetXPAwarded(expLevel, out long xp, out long minXP, player.CanUseLiveTuneBonuses()))
             {
                 TuningTable tuningTable = orbProto.IgnoreRegionDifficultyForXPCalc == false ? agent.Region?.TuningTable : null;
                 xp = avatar.ApplyXPModifiers(xp, false, tuningTable);
@@ -787,7 +788,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             const int MaxProcRank = 100;
             int procRank = (int)(MaxProcRank * shrinkRatio);
 
-            List<PrototypeId> procPowerRefs = ListPool<PrototypeId>.Instance.Get();
+            using var procPowerRefsHandle = ListPool<PrototypeId>.Instance.Get(out List<PrototypeId> procPowerRefs);
             foreach (var kvp in agent.Properties.IteratePropertyRange(PropertyEnum.Proc))
             {
                 Property.FromParam(kvp.Key, 1, out PrototypeId procPowerRef);
@@ -802,8 +803,6 @@ namespace MHServerEmu.Games.GameData.Prototypes
 
             foreach (PrototypeId procPowerRef in procPowerRefs)
                 agent.Properties[PropertyEnum.ProcPowerRank, procPowerRef] = procRank;
-
-            ListPool<PrototypeId>.Instance.Return(procPowerRefs);
         }
 
         private TimeSpan GetShrinkageDurationRemaining(Agent agent)
@@ -1405,7 +1404,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             var region = agent.Region;
             if (region == null) return;
             var volume = new Sphere(agent.RegionLocation.Position, ownerController.AggroRangeAlly);
-            foreach (var entity in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.ActivePartition)))
+            foreach (var entity in region.IterateEntitiesInVolume(volume, new (EntityRegionSPContextFlags.PrimaryPartition)))
             {
                 if (entity is not Agent otherTrap 
                     || otherTrap.Id == agent.Id 
@@ -1457,7 +1456,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             if (entityMan.CreateEntity(taserHotspotSettings) is not WorldEntity taserHotspot) return;
 
             float dist = Math.Max(1.0f, Vector3.Length(distance));
-            Bounds bounds = new(taserHotspot.Bounds);
+            Bounds bounds = taserHotspot.Bounds;    // copy
             bounds.InitializeBox(taserHotspotBoxBounds.Width, dist, taserHotspotBoxBounds.Height, false, taserHotspotBoxBounds.CollisionType);
             taserHotspot.Bounds = bounds;
 

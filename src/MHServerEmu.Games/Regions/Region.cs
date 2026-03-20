@@ -114,7 +114,7 @@ namespace MHServerEmu.Games.Regions
         public int PlayerCount { get => _players.Count; }
 
         public Dictionary<uint, Area> Areas { get; } = new();
-        public IEnumerable<Cell> Cells { get => IterateCellsInVolume(Aabb); }
+        public CellSpatialPartition.ElementIterator<Aabb> Cells { get => IterateCellsInVolume(Aabb); }
         public IEnumerable<Entity> Entities { get => Game.EntityManager.IterateEntities(this); }
 
         // ArchiveData
@@ -689,12 +689,12 @@ namespace MHServerEmu.Games.Regions
             return null;
         }
 
-        public IEnumerable<Cell> IterateCellsInVolume<B>(B bounds) where B : IBounds
+        public CellSpatialPartition.ElementIterator<TVolume> IterateCellsInVolume<TVolume>(TVolume volume) where TVolume : IBounds
         {
-            if (CellSpatialPartition != null)
-                return CellSpatialPartition.IterateElementsInVolume(bounds);
-            else
-                return Enumerable.Empty<Cell>(); //new CellSpatialPartition.ElementIterator();
+            if (CellSpatialPartition == null)
+                return default;
+
+            return CellSpatialPartition.IterateElementsInVolume(volume);
         }
 
         #endregion
@@ -705,28 +705,28 @@ namespace MHServerEmu.Games.Regions
         public void UpdateEntityInSpatialPartition(WorldEntity entity) => EntitySpatialPartition.Update(entity);
         public bool RemoveEntityFromSpatialPartition(WorldEntity entity) => EntitySpatialPartition.Remove(entity);
 
-        public IEnumerable<WorldEntity> IterateEntitiesInRegion(EntityRegionSPContext context)
+        public EntityRegionSpatialPartition.ElementIterator<Aabb> IterateEntitiesInRegion(EntityRegionSPContext context)
         {
             return IterateEntitiesInVolume(Aabb, context);
         }
 
-        public IEnumerable<WorldEntity> IterateEntitiesInVolume<B>(B bound, EntityRegionSPContext context) where B : IBounds
+        public EntityRegionSpatialPartition.ElementIterator<TVolume> IterateEntitiesInVolume<TVolume>(TVolume volume, EntityRegionSPContext context) where TVolume : IBounds
         {
-            if (EntitySpatialPartition != null)
-                return EntitySpatialPartition.IterateElementsInVolume(bound, context);
-            else
-                return Enumerable.Empty<WorldEntity>();
+            if (EntitySpatialPartition == null)
+                return default;
+
+            return EntitySpatialPartition.IterateElementsInVolume(volume, context);
         }
 
-        public IEnumerable<Avatar> IterateAvatarsInVolume(in Sphere bound)
+        public EntityRegionSpatialPartition.RegionAvatarIterator IterateAvatarsInVolume(in Sphere bound)
         {
-            if (EntitySpatialPartition != null)
-                return EntitySpatialPartition.IterateAvatarsInVolume(bound);
-            else
-                return Enumerable.Empty<Avatar>();
+            if (EntitySpatialPartition == null)
+                return default;
+
+            return EntitySpatialPartition.IterateAvatarsInVolume(bound);
         }
 
-        public void GetEntitiesInVolume<B>(List<WorldEntity> entities, B volume, EntityRegionSPContext context) where B : IBounds
+        public void GetEntitiesInVolume<TVolume>(List<WorldEntity> entities, TVolume volume, EntityRegionSPContext context) where TVolume : IBounds
         {
             EntitySpatialPartition?.GetElementsInVolume(entities, volume, context);
         }
@@ -1081,7 +1081,7 @@ namespace MHServerEmu.Games.Regions
                 return globalsProto.ReturnToHubPower;
         }
 
-        public static bool IsBoundsBlockedByEntity(Bounds bounds, WorldEntity entity, BlockingCheckFlags blockFlags)
+        public static bool IsBoundsBlockedByEntity(ref Bounds bounds, WorldEntity entity, BlockingCheckFlags blockFlags)
         {
             if (entity != null)
             {
@@ -1107,8 +1107,8 @@ namespace MHServerEmu.Games.Regions
                     if (otherBlocking == false) return false;
                 }
 
-                Bounds entityBounds = entity.Bounds;
-                if (bounds.CanBeBlockedBy(entityBounds, selfBlocking, otherBlocking) && bounds.Intersects(entityBounds)) return true;
+                ref Bounds entityBounds = ref entity.Bounds;
+                if (bounds.CanBeBlockedBy(ref entityBounds, selfBlocking, otherBlocking) && bounds.Intersects(ref entityBounds)) return true;
             }
 
             return false;
@@ -1192,10 +1192,10 @@ namespace MHServerEmu.Games.Regions
             return false;
         }
 
-        public WorldEntity SweepToFirstHitEntity<T>(Bounds sweepBounds, Vector3 sweepVelocity, ref Vector3? resultHitPosition, T canBlock) where T : ICanBlock
+        public WorldEntity SweepToFirstHitEntity<T>(ref Bounds sweepBounds, Vector3 sweepVelocity, ref Vector3? resultHitPosition, T canBlock) where T : ICanBlock
         {
             bool CanBlockFunc(WorldEntity otherEntity) => canBlock.CanBlock(otherEntity);
-            return SweepToFirstHitEntity(sweepBounds, sweepVelocity, ref resultHitPosition, CanBlockFunc);
+            return SweepToFirstHitEntity(ref sweepBounds, sweepVelocity, ref resultHitPosition, CanBlockFunc);
         }
 
         public WorldEntity SweepToFirstHitEntity(Vector3 startPosition, Vector3 targetPosition, WorldEntity owner,
@@ -1204,7 +1204,7 @@ namespace MHServerEmu.Games.Regions
             Bounds sweepBounds = new();
 
             if (owner != null)
-                sweepBounds = new(owner.Bounds);
+                sweepBounds = owner.Bounds; // copy
 
             if (blocksLOS || owner == null)
                 sweepBounds.InitializeSphere(1.0f, sweepBounds.CollisionType);
@@ -1216,10 +1216,10 @@ namespace MHServerEmu.Games.Regions
             Vector3 sweepVector = targetPosition - startPosition;
 
             bool CanBlockFunc(WorldEntity otherEntity) => CanBlockEntitySweep(otherEntity, owner, targetEntityId, blocksLOS);
-            return SweepToFirstHitEntity(sweepBounds, sweepVector, ref resultHitPosition, CanBlockFunc);
+            return SweepToFirstHitEntity(ref sweepBounds, sweepVector, ref resultHitPosition, CanBlockFunc);
         }
 
-        private WorldEntity SweepToFirstHitEntity(Bounds sweepBounds, Vector3 sweepVelocity, ref Vector3? resultHitPosition, Func<WorldEntity, bool> canBlockFunc)
+        private WorldEntity SweepToFirstHitEntity(ref Bounds sweepBounds, Vector3 sweepVelocity, ref Vector3? resultHitPosition, Func<WorldEntity, bool> canBlockFunc)
         {
             Vector3 sweepStart = sweepBounds.Center;
             Vector3 sweepEnd = sweepStart + sweepVelocity;
@@ -1233,15 +1233,14 @@ namespace MHServerEmu.Games.Regions
             float minTime = 1.0f;
             float minDot = -1f;
             WorldEntity hitEntity = null;
-            var spContext = new EntityRegionSPContext(EntityRegionSPContextFlags.All);
 
-            foreach (var otherEntity in IterateEntitiesInVolume(sweepBox, spContext))
+            foreach (var otherEntity in IterateEntitiesInVolume(sweepBox, new()))
             {
                 if (canBlockFunc(otherEntity))
                 {
                     float resultTime = 1.0f;
                     Vector3? resultNormal = null;
-                    if (sweepBounds.Sweep(otherEntity.Bounds, Vector3.Zero, sweepVelocity, ref resultTime, ref resultNormal))
+                    if (sweepBounds.Sweep(ref otherEntity.Bounds, Vector3.Zero, sweepVelocity, ref resultTime, ref resultNormal))
                     {
                         if (hitEntity != null)
                         {
@@ -1302,11 +1301,11 @@ namespace MHServerEmu.Games.Regions
             return false;
         }
 
-        public bool ChoosePositionAtOrNearPoint(Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags,
+        public bool ChoosePositionAtOrNearPoint(ref Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags,
             float maxDistance, out Vector3 resultPosition, IRandomPositionPredicate positionPredicate = null,
             IEntityCheckPredicate checkPredicate = null, int maxPositionTests = 400)
         {
-            if (IsLocationClear(bounds, pathFlags, posFlags, blockFlags)
+            if (IsLocationClear(ref bounds, pathFlags, posFlags, blockFlags)
                 && (positionPredicate == null || positionPredicate.Test(bounds.Center)))
             {
                 resultPosition = bounds.Center;
@@ -1314,12 +1313,12 @@ namespace MHServerEmu.Games.Regions
             }
             else
             {
-                return ChooseRandomPositionNearPoint(bounds, pathFlags, posFlags, blockFlags, 0, maxDistance, out resultPosition,
+                return ChooseRandomPositionNearPoint(ref bounds, pathFlags, posFlags, blockFlags, 0, maxDistance, out resultPosition,
                     positionPredicate, checkPredicate, maxPositionTests);
             }
         }
 
-        public bool ChooseRandomPositionNearPoint(Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags,
+        public bool ChooseRandomPositionNearPoint(ref Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags,
             float minDistanceFromPoint, float maxDistanceFromPoint, out Vector3 resultPosition, IRandomPositionPredicate positionPredicate = null,
             IEntityCheckPredicate checkPredicate = null, int maxPositionTests = 400, HeightSweepType heightSweep = HeightSweepType.None,
             int maxSweepHeight = 0)
@@ -1350,7 +1349,7 @@ namespace MHServerEmu.Games.Regions
             if (posFlags.HasFlag(PositionCheckFlags.CanBeBlockedEntity) || posFlags.HasFlag(PositionCheckFlags.CanPathToEntities))
             {
                 entitiesInRadius.Capacity = 256;
-                GetEntitiesInVolume(entitiesInRadius, new Sphere(point, maxDistanceFromPoint), new EntityRegionSPContext(EntityRegionSPContextFlags.ActivePartition));
+                GetEntitiesInVolume(entitiesInRadius, new Sphere(point, maxDistanceFromPoint), new EntityRegionSPContext(EntityRegionSPContextFlags.PrimaryPartition));
 
                 if (posFlags.HasFlag(PositionCheckFlags.CanBeBlockedEntity) && checkPredicate != null)
                 {
@@ -1362,7 +1361,7 @@ namespace MHServerEmu.Games.Regions
                 }
             }
 
-            Bounds checkBounds = new(bounds);
+            Bounds checkBounds = bounds;    // copy
             if (blockFlags.HasFlag(BlockingCheckFlags.CheckSpawns))
                 checkBounds.CollisionType = BoundsCollisionType.Blocking;
 
@@ -1446,7 +1445,7 @@ namespace MHServerEmu.Games.Regions
 
                     if (posFlags.HasFlag(PositionCheckFlags.CanBeBlockedEntity))
                     {
-                        if (IsLocationClearOfEntities(checkBounds, entitiesInRadius, blockFlags) == false)
+                        if (IsLocationClearOfEntities(ref checkBounds, entitiesInRadius, blockFlags) == false)
                         {
                             if (posFlags.HasFlag(PositionCheckFlags.PreferNoEntity) && foundBlockedEntity == false)
                             {
@@ -1475,18 +1474,18 @@ namespace MHServerEmu.Games.Regions
             return false;
         }
 
-        private static bool IsLocationClearOfEntities(Bounds bounds, List<WorldEntity> entities, BlockingCheckFlags blockFlags = BlockingCheckFlags.None)
+        private static bool IsLocationClearOfEntities(ref Bounds bounds, List<WorldEntity> entities, BlockingCheckFlags blockFlags = BlockingCheckFlags.None)
         {
             foreach (WorldEntity entity in entities)
             {
-                if (IsBoundsBlockedByEntity(bounds, entity, blockFlags))
+                if (IsBoundsBlockedByEntity(ref bounds, entity, blockFlags))
                     return false;
             }
 
             return true;
         }
 
-        public bool IsLocationClear(Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags = BlockingCheckFlags.None)
+        public bool IsLocationClear(ref Bounds bounds, PathFlags pathFlags, PositionCheckFlags posFlags, BlockingCheckFlags blockFlags = BlockingCheckFlags.None)
         {
             if (NaviMesh.Contains(bounds.Center, bounds.Radius, new DefaultContainsPathFlagsCheck(pathFlags)) == false)
                 return false;
@@ -1494,10 +1493,10 @@ namespace MHServerEmu.Games.Regions
             if (posFlags.HasFlag(PositionCheckFlags.CanBeBlockedEntity) || posFlags.HasFlag(PositionCheckFlags.CanBeBlockedAvatar))
             {
                 var volume = new Sphere(bounds.Center, bounds.Radius);
-                foreach (WorldEntity entity in IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.ActivePartition)))
+                foreach (WorldEntity entity in IterateEntitiesInVolume(volume, new(EntityRegionSPContextFlags.PrimaryPartition)))
                 {
                     if (posFlags.HasFlag(PositionCheckFlags.CanBeBlockedAvatar) && entity is not Avatar) continue;
-                    if (IsBoundsBlockedByEntity(bounds, entity, blockFlags))
+                    if (IsBoundsBlockedByEntity(ref bounds, entity, blockFlags))
                         return false;
                 }
             }
@@ -1507,7 +1506,8 @@ namespace MHServerEmu.Games.Regions
 
         public bool ProjectBoundsIntoRegion(ref Bounds bounds, in Vector3 direction)
         {
-            Point2[] points = Aabb2.Expand(-bounds.GetRadius()).GetPoints();
+            Span<Point2> points = stackalloc Point2[4];
+            Aabb2.Expand(-bounds.GetRadius()).GetPoints(points);
 
             float minDistance = float.MaxValue;
             Vector3 closestPoint = Vector3.Zero;
@@ -1614,7 +1614,7 @@ namespace MHServerEmu.Games.Regions
             if (IsFirstLoaded) return;
             IsFirstLoaded = true;
 
-            List<PrototypeId> timerRefList = ListPool<PrototypeId>.Instance.Get();
+            using var timerRefListHandle = ListPool<PrototypeId>.Instance.Get(out List<PrototypeId> timerRefList);
 
             foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.ScoringEventTimerStartTimeMS))
             {
@@ -1627,8 +1627,6 @@ namespace MHServerEmu.Games.Regions
 
             foreach (PrototypeId timerRef in timerRefList)
                 ScoringEventTimerStart(timerRef);
-
-            ListPool<PrototypeId>.Instance.Return(timerRefList);
         }
 
         public bool GetInterestedClients(List<PlayerConnection> interestedClientList, AOINetworkPolicyValues interestPolicies)

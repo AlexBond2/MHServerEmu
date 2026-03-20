@@ -247,11 +247,11 @@ namespace MHServerEmu.Games.GameData.Prototypes
         {
             if (target is not WorldEntity targetWorldEntity) return false;
 
-            bool isMelle = targetWorldEntity.IsMelee();
+            bool isMelee = targetWorldEntity.IsMelee();
             return OperatorType switch
             {
-                ComparisonOperatorType.EqualTo => isMelle,
-                ComparisonOperatorType.NotEqualTo => !isMelle,
+                ComparisonOperatorType.EqualTo => isMelee,
+                ComparisonOperatorType.NotEqualTo => !isMelee,
                 _ => ProceduralAI.Logger.WarnReturn(false, $"Unsupported operator type in {ToString()}"),
             };
         }
@@ -370,7 +370,7 @@ namespace MHServerEmu.Games.GameData.Prototypes
             Cell cell = targetAgent.Cell;
             if (cell == null) return false;
             List<WorldEntity> entities = new(); 
-            region.GetEntitiesInVolume(entities, cell.RegionBounds, new(EntityRegionSPContextFlags.ActivePartition));
+            region.GetEntitiesInVolume(entities, cell.RegionBounds, new(EntityRegionSPContextFlags.PrimaryPartition));
 
             Agent otherAgent = null;
             foreach (var entity in entities)

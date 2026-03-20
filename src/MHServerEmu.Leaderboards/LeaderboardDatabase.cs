@@ -611,14 +611,12 @@ namespace MHServerEmu.Leaderboards
         /// </summary>
         public void UpdateState()
         {
-            List<Leaderboard> leaderboards = ListPool<Leaderboard>.Instance.Get();
+            using var leaderboardsHandle = ListPool<Leaderboard>.Instance.Get(out List<Leaderboard> leaderboards);
             GetLeaderboards(leaderboards);
 
             DateTime updateTime = Clock.UtcNowPrecise;
             foreach (Leaderboard leaderboard in leaderboards)
                 leaderboard.UpdateState(updateTime);
-
-            ListPool<Leaderboard>.Instance.Return(leaderboards);
         }
 
         /// <summary>
@@ -626,13 +624,11 @@ namespace MHServerEmu.Leaderboards
         /// </summary>
         public void Save()
         {
-            List<Leaderboard> leaderboards = ListPool<Leaderboard>.Instance.Get();
+            using var leaderboardsHandle = ListPool<Leaderboard>.Instance.Get(out List<Leaderboard> leaderboards);
             GetLeaderboards(leaderboards);
 
             foreach (var leaderboard in leaderboards)                
                 leaderboard.ActiveInstance?.SaveEntries(true);
-
-            ListPool<Leaderboard>.Instance.Return(leaderboards);
         }
 
         /// <summary>
@@ -640,22 +636,15 @@ namespace MHServerEmu.Leaderboards
         /// </summary>
         public LeaderboardInstance FindInstance(ulong instanceId)
         {
-            List<Leaderboard> leaderboards = ListPool<Leaderboard>.Instance.Get();
+            using var leaderboardsHandle = ListPool<Leaderboard>.Instance.Get(out List<Leaderboard> leaderboards);
             GetLeaderboards(leaderboards);
 
-            try
-            {
-                foreach (Leaderboard leaderboard in leaderboards)
-                    foreach (LeaderboardInstance instance in leaderboard.Instances)
-                        if (instance.InstanceId == instanceId)
-                            return instance;
+            foreach (Leaderboard leaderboard in leaderboards)
+                foreach (LeaderboardInstance instance in leaderboard.Instances)
+                    if (instance.InstanceId == instanceId)
+                        return instance;
 
-                return null;
-            }
-            finally
-            {
-                ListPool<Leaderboard>.Instance.Return(leaderboards);
-            }
+            return null;
         }
     }
 }

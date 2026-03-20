@@ -139,7 +139,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             WorldEntity targetWorldEntity = senses.GetCurrentTarget();
             ulong targetIdForPower;
 
-            RegionLocation regionLocation = agent.RegionLocation;
+            ref RegionLocation regionLocation = ref agent.RegionLocation;
             RegionLocation targetRegionLocation;
             TargetingShapeType targetingShape = power.GetTargetingShape();
 
@@ -210,7 +210,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
 
                         var volume = new Sphere(regionLocation.Position, powerProto.Radius);
 
-                        foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new EntityRegionSPContext(EntityRegionSPContextFlags.ActivePartition)))
+                        foreach (WorldEntity target in region.IterateEntitiesInVolume(volume, new EntityRegionSPContext(EntityRegionSPContextFlags.PrimaryPartition)))
                         {
                             if (target == null)
                             {
@@ -270,11 +270,11 @@ namespace MHServerEmu.Games.Behavior.StaticAI
 
             if (powerContext.ForceCheckTargetRegionLocation)
             {
-                Bounds targetPositionBounds = new(agent.Bounds);
+                Bounds targetPositionBounds = agent.Bounds;    // copy
                 targetPositionBounds.Center = targetPositionForPower;
 
                 PositionCheckFlags positionCheckFlags = PositionCheckFlags.CanBeBlockedEntity | PositionCheckFlags.CanSweepTo;
-                if (region.IsLocationClear(targetPositionBounds, agent.GetPathFlags(), positionCheckFlags) == false
+                if (region.IsLocationClear(ref targetPositionBounds, agent.GetPathFlags(), positionCheckFlags) == false
                     || agent.CheckCanPathTo(targetPositionForPower) != NaviPathResult.Success)
                     return PowerUseResult.OutOfPosition;
             }
@@ -292,7 +292,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
                     var targetEntityId = Entity.InvalidId;
                     if (targetWorldEntity != null) targetEntityId = targetWorldEntity.Id;
                     Vector3? sweepPosition = Vector3.Zero;
-                    if (movementPower.PowerPositionSweep(regionLocation, targetPositionForPower, targetEntityId, ref sweepPosition) == PowerPositionSweepResult.Clipped)
+                    if (movementPower.PowerPositionSweep(ref regionLocation, targetPositionForPower, targetEntityId, ref sweepPosition) == PowerPositionSweepResult.Clipped)
                         return PowerUseResult.OutOfPosition;
                 }
 
@@ -419,7 +419,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             Region region = agent.Region;
             if (region == null) return false;
 
-            Bounds bounds = new(agent.Bounds);
+            Bounds bounds = agent.Bounds;   // copy
             bounds.Center = worldEntity.RegionLocation.Position;
 
             float minTargetDistance = powerContext.TargetOffset;
@@ -427,7 +427,7 @@ namespace MHServerEmu.Games.Behavior.StaticAI
             float minDistance = powerContext.MinDistanceFromOwner;
 
             DistanceRangePredicate distanceRangePredicat = new(agent.RegionLocation.Position, minDistance, DistanceRangePredicate.Unbound);
-            return region.ChooseRandomPositionNearPoint(bounds, Region.GetPathFlagsForEntity(worldEntity.WorldEntityPrototype),
+            return region.ChooseRandomPositionNearPoint(ref bounds, Region.GetPathFlagsForEntity(worldEntity.WorldEntityPrototype),
                 (PositionCheckFlags.CanBeBlockedEntity | PositionCheckFlags.CanSweepTo), BlockingCheckFlags.None,
                 minTargetDistance, maxTargetDistance, out targetPosition, distanceRangePredicat);
         }

@@ -16,12 +16,12 @@ namespace MHServerEmu.DatabaseAccess.Models
     [Flags]
     public enum AccountFlags
     {
-        None                    = 0,
-        IsBanned                = 1 << 0,
-        IsArchived              = 1 << 1,
-        IsPasswordExpired       = 1 << 2,
-        DEPRECATEDLinuxCompatibilityMode    = 1 << 3,   // This flag used to disable session token verification, but it is no longer needed for Linux users
-        IsWhitelisted           = 1 << 4,
+        None                = 0,
+        IsBanned            = 1 << 0,
+        IsArchived          = 1 << 1,
+        IsPasswordExpired   = 1 << 2,
+        // 1 << 3 was previously used in 0.x for the Linux compatibility mode, it should not be set in any 1.x+ databases.
+        IsWhitelisted       = 1 << 4,
     }
 
     /// <summary>
@@ -29,7 +29,11 @@ namespace MHServerEmu.DatabaseAccess.Models
     /// </summary>
     public class DBAccount
     {
+        private const int LockTimeoutMS = 3000;
+
         private static readonly IdGenerator IdGenerator = new(IdType.Player, 0);
+
+        private readonly SemaphoreSlim _semaphore = new(1, 1);
 
         public long Id { get; set; }
         public string Email { get; set; }
@@ -92,6 +96,17 @@ namespace MHServerEmu.DatabaseAccess.Models
             return $"{PlayerName} (0x{Id:X})";
         }
 
+        public LockScope Lock()
+        {
+            bool lockTaken = _semaphore.Wait(LockTimeoutMS);
+            return new(this, lockTaken);
+        }
+
+        public void Unlock()
+        {
+            _semaphore.Release();
+        }
+
         public void ClearEntities()
         {
             Avatars.Clear();
@@ -99,6 +114,48 @@ namespace MHServerEmu.DatabaseAccess.Models
             Items.Clear();
             ControlledEntities.Clear();
             TransferredEntities.Clear();
+        }
+
+        public EntityUpdateScope BeginEntityUpdate()
+        {
+            Avatars.BeginUpdate();
+            TeamUps.BeginUpdate();
+            Items.BeginUpdate();
+            ControlledEntities.BeginUpdate();
+            TransferredEntities.BeginUpdate();
+
+            return new(this);
+        }
+
+        public void EndEntityUpdate()
+        {
+            Avatars.EndUpdate();
+            TeamUps.EndUpdate();
+            Items.EndUpdate();
+            ControlledEntities.EndUpdate();
+            TransferredEntities.EndUpdate();
+        }
+
+        public readonly struct LockScope(DBAccount account, bool lockTaken) : IDisposable
+        {
+            public readonly DBAccount Account = account;
+            public readonly bool LockTaken = lockTaken;
+
+            public void Dispose()
+            {
+                if (LockTaken)
+                    Account.Unlock();
+            }
+        }
+
+        public readonly struct EntityUpdateScope(DBAccount account) : IDisposable
+        {
+            public readonly DBAccount Account = account;
+
+            public void Dispose()
+            {
+                Account.EndEntityUpdate();
+            }
         }
     }
 }

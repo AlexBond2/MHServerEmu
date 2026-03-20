@@ -93,6 +93,8 @@ namespace MHServerEmu.Games.Entities
         private readonly EventPointer<CommunityPartyCircleChangedEvent> _communityPartyCircleChangedEvent = new();
         private readonly EventPointer<WorldViewUpdateEvent> _worldViewUpdateEvent = new();
         private readonly EventPointer<TeleportToPartyMemberEvent> _teleportToPartyMemberEvent = new();
+        private readonly EventPointer<AutosaveEvent> _autosaveEvent = new();
+
         private readonly EventGroup _pendingEvents = new();
 
         private readonly PropertyCollection _permaBuffProperties = new();
@@ -100,7 +102,7 @@ namespace MHServerEmu.Games.Entities
         private ReplicatedPropertyCollection _avatarProperties = new();
         private ulong _shardId;     // This was probably used for database sharding, we don't need this
         private RepVar_string _playerName = new();
-        private ulong[] _consoleAccountIds = new ulong[(int)PlayerAvatarIndex.Count];
+        private InlineArray2<ulong> _consoleAccountIds;
         private RepVar_string _secondaryPlayerName = new();
 
         // NOTE: EmailVerified and AccountCreationTimestamp are set in NetMessageGiftingRestrictionsUpdate that
@@ -111,9 +113,9 @@ namespace MHServerEmu.Games.Entities
 
         private RepVar_ulong _partyId = new();
 
-        private ulong _guildId;
-        private string _guildName;
-        private GuildMembership _guildMembership;
+        private ulong _guildId = GuildManager.InvalidGuildId;
+        private string _guildName = string.Empty;
+        private GuildMembership _guildMembership = GuildMembership.eGMNone;
 
         private Community _community;
         private List<PrototypeId> _unlockedInventoryList = new();
@@ -165,7 +167,6 @@ namespace MHServerEmu.Games.Entities
         public Avatar PrimaryAvatar { get => CurrentAvatar; } // Fix for PC
         public Avatar SecondaryAvatar { get; private set; }
         public int CurrentAvatarCharacterLevel { get => PrimaryAvatar?.CharacterLevel ?? 0; }
-        public GuildMembership GuildMembership { get; internal set; }
         public PrototypeId ActiveChapter { get => Properties[PropertyEnum.ActiveMissionChapter]; }
         public PrototypeId Faction { get => Properties[PropertyEnum.Faction]; }
         public ulong DialogTargetId { get; private set; }
@@ -181,8 +182,16 @@ namespace MHServerEmu.Games.Entities
         public bool IsInParty { get => PartyId != 0; }
         public List<PrototypeId> PartyFilters { get; } = new();
 
-        public static bool IsPlayerTradeEnabled { get; internal set; }
+        public ulong GuildId { get => _guildId; }
+        public string GuildName { get => _guildName; }
+        public GuildMembership GuildMembership { get => _guildMembership; }
+        public bool IsInGuild { get => _guildId != GuildManager.InvalidGuildId; }
+
         public PlayerTradeStatusCode PlayerTradeStatusCode { get; private set; } = PlayerTradeStatusCode.ePTSC_None;
+        public string PlayerTradePartnerName { get; private set; } = string.Empty;
+        public bool PlayerTradeConfirmFlag { get; private set; }
+        public bool PlayerTradePartnerConfirmFlag { get; private set; }
+        public uint PlayerTradeSequenceNumber { get; private set; }
 
         public Player(Game game) : base(game)
         {
@@ -329,7 +338,7 @@ namespace MHServerEmu.Games.Entities
             // Restore persistent cooldowns
             if (archive.IsPersistent)
             {
-                Dictionary<PropertyId, PropertyValue> setDict = DictionaryPool<PropertyId, PropertyValue>.Instance.Get();
+                using var setDictHandle = DictionaryPool<PropertyId, PropertyValue>.Instance.Get(out Dictionary<PropertyId, PropertyValue> setDict);
 
                 foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.PowerCooldownDurationPersistent))
                 {
@@ -367,8 +376,6 @@ namespace MHServerEmu.Games.Entities
 
                 foreach (var kvp in setDict)
                     Properties[kvp.Key] = kvp.Value;
-
-                DictionaryPool<PropertyId, PropertyValue>.Instance.Return(setDict);
             }
         }
 
@@ -396,8 +403,7 @@ namespace MHServerEmu.Games.Entities
 
             bool success = base.Serialize(archive);
 
-            if (archive.Version >= ArchiveVersion.AddedMissions)
-                success &= Serializer.Transfer(archive, MissionManager);
+            success &= Serializer.Transfer(archive, MissionManager);
 
             success &= Serializer.Transfer(archive, ref _avatarProperties);
 
@@ -448,39 +454,34 @@ namespace MHServerEmu.Games.Entities
 
             if (archive.InvolvesClient == false)
             {
-                if (archive.Version >= ArchiveVersion.ImplementedMapDiscoveryDataPersistence)
-                    success &= Serializer.Transfer(archive, ref _mapDiscoveryDict);
+                success &= Serializer.Transfer(archive, ref _mapDiscoveryDict);
 
-                if (archive.Version >= ArchiveVersion.AddedVendorPurchaseData)
+                // Vendor purchase data
+                uint numVendorPurchaseData = (uint)_vendorPurchaseDataDict.Count;
+                success &= Serializer.Transfer(archive, ref numVendorPurchaseData);
+
+                if (archive.IsPacking)
                 {
-                    uint numVendorPurchaseData = (uint)_vendorPurchaseDataDict.Count;
-                    success &= Serializer.Transfer(archive, ref numVendorPurchaseData);
+                    foreach (VendorPurchaseData purchaseData in _vendorPurchaseDataDict.Values)
+                        success &= Serializer.Transfer(archive, purchaseData);
+                }
+                else
+                {
+                    _vendorPurchaseDataDict.Clear();
 
-                    if (archive.IsPacking)
+                    for (uint i = 0; i < numVendorPurchaseData; i++)
                     {
-                        foreach (VendorPurchaseData purchaseData in _vendorPurchaseDataDict.Values)
-                            success &= Serializer.Transfer(archive, purchaseData);
-                    }
-                    else
-                    {
-                        _vendorPurchaseDataDict.Clear();
+                        VendorPurchaseData purchaseData = new(PrototypeId.Invalid);
+                        success &= Serializer.Transfer(archive, ref purchaseData);
 
-                        for (uint i = 0; i < numVendorPurchaseData; i++)
-                        {
-                            VendorPurchaseData purchaseData = new(PrototypeId.Invalid);
-                            success &= Serializer.Transfer(archive, ref purchaseData);
-
-                            if (_vendorPurchaseDataDict.TryAdd(purchaseData.InventoryProtoRef, purchaseData) == false)
-                                Logger.Warn($"Serialize(): Failed to add deserialized vendor purchase data {purchaseData}");
-                        }
+                        if (_vendorPurchaseDataDict.TryAdd(purchaseData.InventoryProtoRef, purchaseData) == false)
+                            Logger.Warn($"Serialize(): Failed to add deserialized vendor purchase data {purchaseData}");
                     }
                 }
 
-                if (archive.Version >= ArchiveVersion.ImplementedLoginRewards)
-                {
-                    success &= Serializer.Transfer(archive, ref _loginCount);
-                    success &= Serializer.Transfer(archive, ref _loginRewardCooldownTimeStart);
-                }
+                // Login count
+                success &= Serializer.Transfer(archive, ref _loginCount);
+                success &= Serializer.Transfer(archive, ref _loginRewardCooldownTimeStart);
             }
 
             return success;
@@ -513,13 +514,21 @@ namespace MHServerEmu.Games.Entities
 
             OnEnterGameInitStashTabOptions();
 
+            ClearPlayerTradeInventory();
+
             InitializeVendors();
+            ScheduleAutosave();
             ScheduleCheckHoursPlayedEvent();
             UpdateUISystemLocks();
+
+            Game.GuildManager.OnPlayerEnteringGame(this);
         }
 
         public override void ExitGame()
         {
+            if (_autosaveEvent.IsValid)
+                Game.GameEventScheduler.CancelEvent(_autosaveEvent);
+
             CancelPlayerTrade();
 
             SendMessage(NetMessageBeginExitGame.DefaultInstance);
@@ -530,6 +539,8 @@ namespace MHServerEmu.Games.Entities
 
         public override void Destroy()
         {
+            Game.GuildManager.OnPlayerLeavingGame(this);
+
             var region = GetRegion();
             if (region != null)
                 MissionManager.Shutdown(region);
@@ -1008,9 +1019,9 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
-        public override void OnOtherEntityAddedToMyInventory(Entity entity, InventoryLocation invLoc, bool unpackedArchivedEntity)
+        public override void OnOtherEntityAddedToMyInventory(Entity entity, ref InventoryLocation invLoc, bool unpackedArchivedEntity)
         {
-            base.OnOtherEntityAddedToMyInventory(entity, invLoc, unpackedArchivedEntity);
+            base.OnOtherEntityAddedToMyInventory(entity, ref invLoc, unpackedArchivedEntity);
 
             if (entity is Avatar avatar)
             {
@@ -1061,7 +1072,7 @@ namespace MHServerEmu.Games.Entities
             // Update vendor inventories if we are adding a recipe
             if (invLoc.InventoryConvenienceLabel == InventoryConvenienceLabel.CraftingRecipesLearned)
             {
-                List<VendorTypePrototype> vendorsToUpdate = ListPool<VendorTypePrototype>.Instance.Get();
+                using var vendorsToUpdateHandle = ListPool<VendorTypePrototype>.Instance.Get(out List<VendorTypePrototype> vendorsToUpdate);
 
                 foreach (var kvp in Properties.IteratePropertyRange(PropertyEnum.VendorLevel))
                 {
@@ -1081,8 +1092,6 @@ namespace MHServerEmu.Games.Entities
 
                 foreach (VendorTypePrototype vendorTypeProto in vendorsToUpdate)
                     RollVendorInventory(vendorTypeProto, false);
-
-                ListPool<VendorTypePrototype>.Instance.Return(vendorsToUpdate);
             }
 
             // Adjust available ingredients for auto populated inputs
@@ -1106,9 +1115,9 @@ namespace MHServerEmu.Games.Entities
             }
         }
 
-        public override void OnOtherEntityRemovedFromMyInventory(Entity entity, InventoryLocation invLoc)
+        public override void OnOtherEntityRemovedFromMyInventory(Entity entity, ref InventoryLocation invLoc)
         {
-            base.OnOtherEntityRemovedFromMyInventory(entity, invLoc);
+            base.OnOtherEntityRemovedFromMyInventory(entity, ref invLoc);
 
             if (IsInGame == false || entity is not Item item)
                 return;
@@ -1194,8 +1203,8 @@ namespace MHServerEmu.Games.Entities
             }
 
             // Repeat PlayerCanMove validation done by the client
-            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);   // <-- This is heap allocated, which is not great. TODO: pooling?
-            if (item.PlayerCanMove(this, invLoc, out InventoryResult canMoveResult, out PropertyEnum canMoveResultProperty, out _) == false)
+            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);
+            if (item.PlayerCanMove(this, ref invLoc, out InventoryResult canMoveResult, out PropertyEnum canMoveResultProperty, out _) == false)
                 return Logger.WarnReturn(false, $"TryInventoryMove(): PlayerCanMove check failed, player=[{this}], item={item}, canMoveResult={canMoveResult}, canMoveResultProperty=[{canMoveResultProperty}]");
 
             // Move
@@ -1239,8 +1248,8 @@ namespace MHServerEmu.Games.Entities
             if (inventory == null) return Logger.WarnReturn(false, "TryInventoryStackSplit(): inventory == null");
 
             // Do the split
-            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);   // <-- This is heap allocated, which is not great. TODO: pooling?
-            InventoryResult result = item.SplitStack(invLoc, 1);
+            InventoryLocation invLoc = new(containerId, inventoryProtoRef, slot);
+            InventoryResult result = item.SplitStack(ref invLoc, 1);
 
             if (result == InventoryResult.InventoryFull)
             {
@@ -1278,7 +1287,7 @@ namespace MHServerEmu.Games.Entities
             Region region = avatar.Region;
 
             // Find a position to drop
-            if (region.ChooseRandomPositionNearPoint(avatar.Bounds, PathFlags.Walk, PositionCheckFlags.CanBeBlockedEntity,
+            if (region.ChooseRandomPositionNearPoint(ref avatar.Bounds, PathFlags.Walk, PositionCheckFlags.CanBeBlockedEntity,
                 BlockingCheckFlags.CheckSpawns, 50f, 100f, out Vector3 dropPosition) == false)
             {
                 // Fall back to avatar position if didn't find a free spot
@@ -1526,16 +1535,16 @@ namespace MHServerEmu.Games.Entities
             return true;
         }
 
-        public InventoryResult ValidatePlayerInventoryMoveConstraints(InventoryLocation fromInvLoc, InventoryLocation toInvLoc)
+        public InventoryResult ValidatePlayerInventoryMoveConstraints(ref InventoryLocation fromInvLoc, ref InventoryLocation toInvLoc)
         {
-            InventoryResult result = ValidatePlayerCanMoveDirectlyOutOfInventory(fromInvLoc);
+            InventoryResult result = ValidatePlayerCanMoveDirectlyOutOfInventory(ref fromInvLoc);
             if (result != InventoryResult.Success)
                 return result;
 
             return ValidatePlayerCanMoveDirectlyIntoInventory(toInvLoc);
         }
 
-        public InventoryResult ValidatePlayerCanMoveDirectlyOutOfInventory(InventoryLocation fromInvLoc)
+        public InventoryResult ValidatePlayerCanMoveDirectlyOutOfInventory(ref InventoryLocation fromInvLoc)
         {
             if (fromInvLoc.InventoryConvenienceLabel == InventoryConvenienceLabel.CraftingResults)
             {
@@ -1667,7 +1676,7 @@ namespace MHServerEmu.Games.Entities
         /// </summary>
         private void OnEnterGameInitStashTabOptions()
         {
-            List<PrototypeId> stashInvRefs = ListPool<PrototypeId>.Instance.Get();
+            using var stashInvRefsHandle = ListPool<PrototypeId>.Instance.Get(out List<PrototypeId> stashInvRefs);
             if (GetStashInventoryProtoRefs(stashInvRefs, false, true))
             {
                 foreach (PrototypeId stashRef in stashInvRefs)
@@ -1678,10 +1687,8 @@ namespace MHServerEmu.Games.Entities
             }
             else
             {
-                Logger.Warn("OnEnterGameInitStashTabOptions()(): GetStashInventoryProtoRefs(stashInvRefs, false, true) == false");
+                Logger.Warn("OnEnterGameInitStashTabOptions(): GetStashInventoryProtoRefs(stashInvRefs, false, true) == false");
             }
-
-            ListPool<PrototypeId>.Instance.Return(stashInvRefs);
         }
 
         #endregion
@@ -2971,7 +2978,7 @@ namespace MHServerEmu.Games.Entities
             return GetMapDiscoveryData(region.Id);
         }
 
-        public bool DiscoverEntity(WorldEntity worldEntity, bool updateInterest)
+        public bool DiscoverEntity(WorldEntity worldEntity, bool updateInterest, bool syncWithParty = true)
         {
             MapDiscoveryData mapDiscoveryData = GetMapDiscoveryDataForEntity(worldEntity);
             if (mapDiscoveryData == null) return Logger.WarnReturn(false, "DiscoverEntity(): mapDiscoveryData == null");
@@ -2981,6 +2988,21 @@ namespace MHServerEmu.Games.Entities
 
             if (updateInterest)
                 AOI.ConsiderEntity(worldEntity);
+
+            if (syncWithParty)
+            {
+                Party party = GetParty();
+                if (party != null)
+                {
+                    EntityManager entityManager = Game.EntityManager;
+                    foreach (var kvp in party)
+                    {
+                        Player partyMember = entityManager.GetEntityByDbGuid<Player>(kvp.Key);
+                        if (ShouldSyncMapDiscoveryData(partyMember))
+                            partyMember.DiscoverEntity(worldEntity, true, false);
+                    }
+                }
+            }
 
             return true;
         }
@@ -3005,7 +3027,7 @@ namespace MHServerEmu.Games.Entities
             return mapDiscoveryData != null && mapDiscoveryData.IsEntityDiscovered(worldEntity);
         }
 
-        public bool RevealDiscoveryMap(Vector3 position)
+        public bool DiscoverMapPosition(Vector3 position, bool syncWithParty = true)
         {
             var region = CurrentAvatar?.Region;
             if (region == null) return Logger.WarnReturn(false, "UpdateMapDiscovery(): region == null");
@@ -3015,7 +3037,20 @@ namespace MHServerEmu.Games.Entities
 
             bool reveal = mapDiscoveryData.RevealPosition(this, position);
 
-            // TODO party reveal
+            if (syncWithParty)
+            {
+                Party party = GetParty();
+                if (party != null)
+                {
+                    EntityManager entityManager = Game.EntityManager;
+                    foreach (var kvp in party)
+                    {
+                        Player partyMember = entityManager.GetEntityByDbGuid<Player>(kvp.Key);
+                        if (ShouldSyncMapDiscoveryData(partyMember))
+                            partyMember.DiscoverMapPosition(position, false);
+                    }
+                }
+            }
 
             return reveal;
         }
@@ -3073,11 +3108,363 @@ namespace MHServerEmu.Games.Entities
 
         #endregion
 
-        #region Trading
+        #region Trade
+
+        public void StartPlayerTrade(string partnerName)
+        {
+            if (IsPlayerTradeEnabled() == false)
+            {
+                SetPlayerTradeStatusCode(PlayerTradeStatusCode.ePTSC_Disabled);
+                return;
+            }
+
+            // This is client input, so case may not match for whatever reason.
+            if (string.Equals(PlayerTradePartnerName, partnerName, StringComparison.OrdinalIgnoreCase))
+            {
+                // If already trading with this player, send sync the current status and do an early exit.
+                if (PlayerTradeStatusCode == PlayerTradeStatusCode.ePTSC_SentInvitation ||
+                    PlayerTradeStatusCode == PlayerTradeStatusCode.ePTSC_TradeInProgress)
+                {
+                    SendPlayerTradeStatus();
+                    return;
+                }
+            }
+            else
+            {
+                // If trading with a different player, cancel that trade.
+                if (HasActiveTradingSession())
+                    CancelPlayerTrade();
+            }
+
+            Player tradePartner = Game.EntityManager.GetPlayerByName(partnerName);
+            if (tradePartner == null || tradePartner == this)
+            {
+                SetPlayerTradeStatusCode(PlayerTradeStatusCode.ePTSC_InvalidPartner);
+                return;
+            }
+
+            if (IsIgnoredPlayer(tradePartner.DatabaseUniqueId))
+            {
+                SetPlayerTradeStatusCode(PlayerTradeStatusCode.ePTSC_PartnerIsIgnored);
+                return;
+            }
+
+            // Send an invitation first if the partner doesn't have one already.
+            if (tradePartner.PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_SentInvitation ||
+                tradePartner.PlayerTradePartnerName.Equals(GetName(), StringComparison.OrdinalIgnoreCase) == false)
+            {
+                if (tradePartner.HasActiveTradingSession() || tradePartner.IsIgnoredPlayer(DatabaseUniqueId))
+                {
+                    SetPlayerTradeStatusCode(PlayerTradeStatusCode.ePTSC_PartnerIsBusy);
+                    return;
+                }
+
+                SendPlayerTradeInvite(this, tradePartner);
+                return;
+            }
+
+            // Accept the invitation and start the trade!
+            AcceptPlayerTradeInvite(this, tradePartner);
+        }
 
         public void CancelPlayerTrade()
         {
-            // TODO
+            if (HasActiveTradingSession() == false)
+            {
+                SendPlayerTradeStatus();
+                return;
+            }
+
+            Player tradePartner = Game.EntityManager.GetPlayerByName(PlayerTradePartnerName);
+            if (tradePartner == null)
+            {
+                Logger.Warn("CancelPlayerTrade(): tradePartner == null");
+                return;
+            }
+
+            DoCancelPlayerTrade(this, tradePartner);     
+        }
+
+        public void SetPlayerTradeConfirmFlag(bool confirmFlag, uint sequenceNumber)
+        {
+            if (PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_TradeInProgress || PlayerTradeSequenceNumber != sequenceNumber)
+            {
+                SendPlayerTradeStatus();
+                return;
+            }
+
+            Player tradePartner = Game.EntityManager.GetPlayerByName(PlayerTradePartnerName);
+            if (tradePartner == null)
+            {
+                Logger.Warn("SetPlayerTradeConfirmFlag(): tradePartner == null");
+                return;
+            }
+
+            confirmFlag &= HasInventorySpaceToReceivePlayerTrade();
+
+            PlayerTradeConfirmFlag = confirmFlag;
+            tradePartner.PlayerTradePartnerConfirmFlag = confirmFlag;
+
+            if (PlayerTradeConfirmFlag && tradePartner.PlayerTradeConfirmFlag)
+                ExecutePlayerTrade(this, tradePartner);
+
+            SendPlayerTradeStatus();
+            tradePartner.SendPlayerTradeStatus();
+        }
+
+        public void OnPlayerTradeInventoryChanged()
+        {
+            if (PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_TradeInProgress)
+                return;
+
+            Player tradePartner = Game.EntityManager.GetPlayerByName(PlayerTradePartnerName);
+            if (tradePartner == null)
+            {
+                Logger.Warn("OnPlayerTradeInventoryChanged(): tradePartner == null");
+                return;
+            }
+
+            IncrementPlayerTradeSequenceNumber();
+            tradePartner.IncrementPlayerTradeSequenceNumber();
+        }
+
+        public static bool IsPlayerTradeEnabled()
+        {
+            return LiveTuningManager.GetLiveGlobalTuningVar(GlobalTuningVar.eGTV_PlayerTradeEnabled) != 0f;
+        }
+
+        public bool HasActiveTradingSession()
+        {
+            switch (PlayerTradeStatusCode)
+            {
+                case PlayerTradeStatusCode.ePTSC_SentInvitation:
+                case PlayerTradeStatusCode.ePTSC_ReceivedInvitation:
+                case PlayerTradeStatusCode.ePTSC_TradeInProgress:
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        private static void SendPlayerTradeInvite(Player initiator, Player target)
+        {
+            initiator.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_SentInvitation;
+            initiator.PlayerTradePartnerName = target.GetName();
+            initiator.SendPlayerTradeStatus();
+
+            target.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_ReceivedInvitation;
+            target.PlayerTradePartnerName = initiator.GetName();
+            target.SendPlayerTradeStatus();
+        }
+
+        private static void AcceptPlayerTradeInvite(Player initiator, Player target)
+        {
+            initiator.InitializeTradeInProgress(target);
+
+            target.InitializeTradeInProgress(initiator);
+        }
+
+        private static void DoCancelPlayerTrade(Player initiator, Player target)
+        {
+            initiator.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_Cancelled;
+            initiator.AOI.ConsiderEntity(target);
+            initiator.SendPlayerTradeStatus();
+            initiator.ClearPlayerTradeInventory();
+
+            target.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_PartnerCancelled;
+            target.AOI.ConsiderEntity(initiator);
+            target.SendPlayerTradeStatus();
+            target.ClearPlayerTradeInventory();
+        }
+
+        private static void ExecutePlayerTrade(Player initiator, Player target)
+        {
+            initiator.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_TradeExecuted;
+            initiator.AOI.ConsiderEntity(target);
+
+            target.PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_TradeExecuted;
+            target.AOI.ConsiderEntity(initiator);
+
+            ExchangePlayerTradeInventories(initiator, target);
+        }
+
+        /// <summary>
+        /// Updates the value of <see cref="PlayerTradeStatusCode"/> and sends it to the client.
+        /// </summary>
+        private void SetPlayerTradeStatusCode(PlayerTradeStatusCode status)
+        {
+            PlayerTradeStatusCode = status;
+            SendPlayerTradeStatus();
+        }
+
+        private void InitializeTradeInProgress(Player tradePartner)
+        {
+            PlayerTradeStatusCode = PlayerTradeStatusCode.ePTSC_TradeInProgress;
+            PlayerTradeConfirmFlag = false;
+            PlayerTradePartnerConfirmFlag = false;
+            PlayerTradeSequenceNumber = 0;
+
+            AOI.ConsiderEntity(tradePartner);
+            SendPlayerTradeStatus();
+        }
+
+        private void IncrementPlayerTradeSequenceNumber()
+        {
+            PlayerTradeConfirmFlag = false;
+            PlayerTradePartnerConfirmFlag = false;
+            PlayerTradeSequenceNumber++;
+
+            SendPlayerTradeStatus();
+        }
+
+        private bool HasInventorySpaceToReceivePlayerTrade()
+        {
+            if (PlayerTradeStatusCode != PlayerTradeStatusCode.ePTSC_TradeInProgress)
+                return false;
+
+            Player tradePartner = Game.EntityManager.GetPlayerByName(PlayerTradePartnerName);
+
+            Inventory playerGeneralInventory = GetInventory(InventoryConvenienceLabel.General);
+            if (playerGeneralInventory == null) return Logger.WarnReturn(false, "HasInventorySpaceToReceivePlayerTrade(): playerGeneralInventory == null");
+
+            Inventory partnerTradeInventory = tradePartner?.GetInventory(InventoryConvenienceLabel.Trade);
+            if (partnerTradeInventory == null) return Logger.WarnReturn(false, "HasInventorySpaceToReceivePlayerTrade(): partnerTradeInventory == null");
+
+            return partnerTradeInventory.Count <= playerGeneralInventory.CapacityRemaining;
+        }
+
+        private bool GetInventoriesForPlayerTrade(out Inventory tradeInv, out Inventory generalInv, out Inventory fallbackInv)
+        {
+            tradeInv = null;
+            generalInv = null;
+            fallbackInv = null;
+
+            tradeInv = GetInventory(InventoryConvenienceLabel.Trade);
+            if (tradeInv == null) return Logger.WarnReturn(false, "GetInventoriesForPlayerTrade(): tradeInv == null");
+
+            generalInv = GetInventory(InventoryConvenienceLabel.General);
+            if (generalInv == null) return Logger.WarnReturn(false, "GetInventoriesForPlayerTrade(): generalInv == null");
+
+            fallbackInv = GetInventory(InventoryConvenienceLabel.DeliveryBox);
+            if (fallbackInv == null) return Logger.WarnReturn(false, "GetInventoriesForPlayerTrade(): initiatorFallbackInv == null");
+
+            return true;
+        }
+
+        private static bool ExchangePlayerTradeInventories(Player playerA, Player playerB)
+        {
+            if (playerA.GetInventoriesForPlayerTrade(out Inventory tradeInvA, out Inventory generalInvA, out Inventory fallbackInvA) == false)
+                return Logger.WarnReturn(false, $"ExchangePlayerTradeInventories(): Failed to get one or more trade inventories for initiator player [{playerA}]");
+
+            if (playerB.GetInventoriesForPlayerTrade(out Inventory tradeInvB, out Inventory generalInvB, out Inventory fallbackInvB) == false)
+                return Logger.WarnReturn(false, $"ExchangePlayerTradeInventories(): Failed to get one or more trade inventories for target player [{playerA}]");
+
+            using var itemsAHandle = ListPool<Entity>.Instance.Get(out List<Entity> itemsA);
+            using var itemsBHandle = ListPool<Entity>.Instance.Get(out List<Entity> itemsB);
+
+            GatherItemsForPlayerTrade(tradeInvA, itemsA);
+            GatherItemsForPlayerTrade(tradeInvB, itemsB);
+
+            ReceiveItemsFromPlayerTrade(playerA, itemsA, generalInvB, fallbackInvB);
+            ReceiveItemsFromPlayerTrade(playerB, itemsB, generalInvA, fallbackInvA);
+
+            return true;
+        }
+
+        private static void GatherItemsForPlayerTrade(Inventory tradeInv, List<Entity> items)
+        {
+            EntityManager entityManager = tradeInv.Game.EntityManager;
+
+            while (tradeInv.Count > 0)
+            {
+                ulong entityId = tradeInv.GetAnyEntity();
+                Entity entity = entityManager.GetEntity<Entity>(entityId);
+                
+                if (entity == null)
+                {
+                    Logger.Error("GatherItemsForPlayerTrade(): entity == null");
+                    return;
+                }
+
+                if (entity.ChangeInventoryLocation(null) != InventoryResult.Success)
+                {
+                    Logger.Error($"GatherItemsForPlayerTrade(): Failed to remove entity [{entity}] from the trade inventory");
+                    return;
+                }
+
+                items.Add(entity);
+            }
+        }
+
+        private static void ReceiveItemsFromPlayerTrade(Player oldOwner, List<Entity> items, Inventory destinationInv, Inventory fallbackInv)
+        {
+            Player newOwner = (Player)destinationInv.Owner;
+
+            while (items.Count > 0)
+            {
+                int i = items.Count - 1;
+                Entity item = items[i];
+                int oldStackSize = item.CurrentStackSize;
+
+                ulong? stackId = 0;
+                InventoryResult result = item.ChangeInventoryLocation(destinationInv, Inventory.InvalidSlot, ref stackId, true);
+                
+                if (result != InventoryResult.Success)
+                {
+                    Logger.Warn($"ReceiveItemsFromPlayerTrade(): Failed to move item [{item}] to destination inventory with result {result}!\noldOwner=[{oldOwner}], newOwner=[{newOwner}]");
+
+                    result = item.ChangeInventoryLocation(fallbackInv, Inventory.InvalidSlot, ref stackId, true);
+
+                    if (result != InventoryResult.Success)
+                        Logger.Error($"ReceiveItemsFromPlayerTrade(): Failed to move item [{item}] to fallback inventory with result {result}!\noldOwner=[{oldOwner}], newOwner=[{newOwner}]");
+                }
+
+                // Do not remove the item yet if we only moved a part of a stack.
+                int newStackSize = item.CurrentStackSize;
+                if (stackId != 0 && item.IsDestroyed == false && newStackSize > 0 && newStackSize < oldStackSize)
+                    continue;
+
+                Logger.Trace($"ReceiveItemsFromPlayerTrade(): [{oldOwner}] => [{newOwner}] - [{item}]");
+                items.RemoveAt(i);
+            }
+        }
+
+        private bool ClearPlayerTradeInventory()
+        {
+            if (GetInventoriesForPlayerTrade(out Inventory tradeInv, out Inventory generalInv, out Inventory fallbackInv) == false)
+                return Logger.WarnReturn(false, $"ClearPlayerTradeInventory(): Failed to get one or more of the trade inventories for player [{this}]");
+
+            EntityManager entityManager = Game.EntityManager;
+
+            while (tradeInv.Count > 0)
+            {
+                ulong entityId = tradeInv.GetAnyEntity();
+                Entity entity = entityManager.GetEntity<Entity>(entityId);
+                if (entity == null) return Logger.WarnReturn(false, "ClearPlayerTradeInventory(): entity == null");
+
+                if (entity.ChangeInventoryLocation(generalInv) != InventoryResult.Success)
+                {
+                    Logger.Warn($"ClearPlayerTradeInventory(): Failed to return [{entity}] to general inventory for player [{this}]");
+                    if (entity.ChangeInventoryLocation(fallbackInv) != InventoryResult.Success)
+                        return Logger.ErrorReturn(false, $"ClearPlayerTradeInventory(): Failed to return [{entity}] to fallback inventory for player [{this}]");
+                }
+            }
+
+            return true;
+        }
+
+        private void SendPlayerTradeStatus()
+        {
+            NetMessagePlayerTradeStatus playerTradeStatus = NetMessagePlayerTradeStatus.CreateBuilder()
+                .SetStatusCode(PlayerTradeStatusCode)
+                .SetPartnerPlayerName(PlayerTradePartnerName)
+                .SetConfirmFlag(PlayerTradeConfirmFlag)
+                .SetPartnerConfirmFlag(PlayerTradePartnerConfirmFlag)
+                .SetSequenceNumber(PlayerTradeSequenceNumber)
+                .Build();
+
+            SendMessage(playerTradeStatus);
         }
 
         #endregion
@@ -3582,7 +3969,7 @@ namespace MHServerEmu.Games.Entities
             Party party = GetParty();
             if (party != null && party.Type == GroupType.GroupType_Party && avatars.Count > 0)
             {
-                List<PrototypeId> newFilters = ListPool<PrototypeId>.Instance.Get();
+                using var newFiltersHandle = ListPool<PrototypeId>.Instance.Get(out List<PrototypeId> newFilters);
 
                 foreach (PrototypeId partyFilterProtoRef in DataDirectory.Instance.IteratePrototypesInHierarchy<PartyFilterPrototype>(PrototypeIterateFlags.NoAbstractApprovedOnly))
                 {
@@ -3598,8 +3985,6 @@ namespace MHServerEmu.Games.Entities
                     PartyFilters.Set(newFilters);
                     updateContext = true;
                 }
-
-                ListPool<PrototypeId>.Instance.Return(newFilters);
             }
             else if (PartyFilters.Count > 0)
             {
@@ -3885,6 +4270,12 @@ namespace MHServerEmu.Games.Entities
 
         // Community update broadcasts are done via scheduled events to avoid multiple broadcasts at once.
 
+        public bool IsIgnoredPlayer(ulong playerDbId)
+        {
+            CommunityCircle ignoreCircle = Community?.GetCircle(CircleId.__Ignore);
+            return ignoreCircle != null && ignoreCircle.ContainsPlayerDbGuid(playerDbId);
+        }
+
         public void ScheduleCommunityBroadcast()
         {
             if (_communityBroadcastEvent.IsValid)
@@ -3972,8 +4363,8 @@ namespace MHServerEmu.Games.Entities
             CommunityCircle partyCircle = Community?.GetCircle(CircleId.__Party);
             if (partyCircle == null) return Logger.WarnReturn(false, "OnPartyCircleChanged(): partyCircle == null");
 
-            List<AvatarPrototype> avatars = ListPool<AvatarPrototype>.Instance.Get();
-            List<CostumePrototype> costumes = ListPool<CostumePrototype>.Instance.Get();
+            using var avatarsHandle = ListPool<AvatarPrototype>.Instance.Get(out List<AvatarPrototype> avatars);
+            using var costumesHandle = ListPool<CostumePrototype>.Instance.Get(out List<CostumePrototype> costumes);
 
             ulong playerDbId = DatabaseUniqueId;
             int playerIndex = -1;
@@ -4009,9 +4400,6 @@ namespace MHServerEmu.Games.Entities
             }
 
             UpdatePartyFilters(avatars, costumes, playerIndex);
-
-            ListPool<AvatarPrototype>.Instance.Return(avatars);
-            ListPool<CostumePrototype>.Instance.Return(costumes);
 
             return true;
         }
@@ -4113,7 +4501,7 @@ namespace MHServerEmu.Games.Entities
                 avatar.SyncPartyBoostConditions();
             }
 
-            // TODO: sync discovery data
+            SyncMapDiscoveryDataWithParty();
 
             // we should receive a OnPartySizeChanged callback after this
         }
@@ -4164,6 +4552,7 @@ namespace MHServerEmu.Games.Entities
             _partyId.Set(party.PartyId);
             UpdatePartyAOI(party);
             Community.UpdateParty(party);
+            SyncMapDiscoveryDataWithParty();
         }
 
         private void UpdatePartyAOI(Party party)
@@ -4189,6 +4578,50 @@ namespace MHServerEmu.Games.Entities
                 AOI.ConsiderEntity(partyMember);
                 partyMember.AOI.ConsiderEntity(this);
             }
+        }
+
+        private void SyncMapDiscoveryDataWithParty()
+        {
+            Party party = GetParty();
+            if (party == null)
+                return;
+
+            Region region = GetRegion();
+            if (region == null)
+                return;
+
+            MapDiscoveryData mapDiscoveryData = GetMapDiscoveryData(region.Id);
+            if (mapDiscoveryData == null)
+                return;
+
+            using var partyMembersHandle = ListPool<Player>.Instance.Get(out List<Player> partyMembers);
+
+            EntityManager entityManager = Game.EntityManager;
+            foreach (var kvp in party)
+            {
+                Player partyMember = entityManager.GetEntityByDbGuid<Player>(kvp.Key);
+                if (ShouldSyncMapDiscoveryData(partyMember))
+                    partyMembers.Add(partyMember);
+            }
+
+            mapDiscoveryData.Sync(this, partyMembers);
+        }
+
+        private bool ShouldSyncMapDiscoveryData(Player other)
+        {
+            if (other == null || other.Id == Id)
+                return false;
+
+            Region region = GetRegion();
+            Region otherRegion = other.GetRegion();
+
+            if (region == null || otherRegion == null)
+                return false;
+
+            if (region.Id != otherRegion.Id)
+                return false;
+
+            return true;
         }
 
         private bool TeleportToPartyMember(ulong targetPlayerDbId)
@@ -4251,6 +4684,59 @@ namespace MHServerEmu.Games.Entities
             using Teleporter teleporter = ObjectPoolManager.Instance.Get<Teleporter>();
             teleporter.Initialize(this, TeleportContextEnum.TeleportContext_Party);
             return teleporter.TeleportToPlayer(targetPlayerDbId);
+        }
+
+        #endregion
+
+        #region Guild
+
+        public Social.Guilds.Guild GetGuild()
+        {
+            return Game.GuildManager.GetGuild(_guildId);
+        }
+
+        public bool SetGuildMembership(ulong guildId, string guildName, GuildMembership guildMembership)
+        {
+            if (_guildId == guildId && _guildName == guildName && _guildMembership == guildMembership)
+                return false;
+
+            _guildId = guildId;
+            _guildName = guildName;
+            _guildMembership = guildMembership;
+
+            foreach (Avatar avatar in new AvatarIterator(this))
+                avatar.SetGuildMembership(guildId, guildName, guildMembership);
+
+            GuildMember.SendEntityGuildInfo(this, guildId, guildName, guildMembership);
+
+            if (guildId != GuildManager.InvalidGuildId)
+            {
+                Social.Guilds.Guild guild = Game.GuildManager.GetGuild(guildId);
+                if (guild != null)
+                    Community.UpdateGuild(guild);
+                else
+                    Logger.Warn("SetGuildMembership(): guild == null");
+            }
+            else
+            {
+                Community.UpdateGuild(null);
+            }
+
+            return true;
+        }
+
+        public bool GuildsAreUnlocked()
+        {
+            // This property check existed in older versions of the game (at least 1.10-1.25), but it had been removed as of 1.48.
+            // Although it's meaningless in later versions, I'm leaving this in for consistency / reference.
+            //return Properties[PropertyEnum.GuildsUnlocked];
+            return true;
+        }
+
+        public bool UnlockGuilds(bool value)
+        {
+            // See GuildsAreUnlocked()
+            return true;
         }
 
         #endregion
@@ -4374,6 +4860,35 @@ namespace MHServerEmu.Games.Entities
 
         #endregion
 
+        #region Autosave
+
+        private void ScheduleAutosave()
+        {
+            if (_autosaveEvent.IsValid)
+                return;
+
+            TimeSpan autoSaveInterval = TimeSpan.FromMinutes(Game.CustomGameOptions.AutosaveIntervalMinutes);
+            if (autoSaveInterval <= TimeSpan.Zero)
+                return;
+
+            ScheduleEntityEvent(_autosaveEvent, autoSaveInterval);
+        }
+
+        private void Autosave()
+        {
+            if (PlayerConnection == null)
+                return;
+
+            if (IsInGame == false)
+                return;
+
+            Logger.Info($"Autosaving {this}...");
+            PlayerConnection.SaveWithNotification();
+            ScheduleAutosave();
+        }
+
+        #endregion
+
         #region Scheduled Events
 
         private class ScheduledHUDTutorialResetEvent : CallMethodEvent<Entity>
@@ -4411,6 +4926,11 @@ namespace MHServerEmu.Games.Entities
             protected override CallbackDelegate GetCallback() => (t, p1) => ((Player)t).TeleportToPartyMember(p1);
         }
 
+        private class AutosaveEvent : CallMethodEvent<Entity>
+        {
+            protected override CallbackDelegate GetCallback() => (t) => ((Player)t).Autosave();
+        }
+
         #endregion
 
         protected override void BuildString(StringBuilder sb)
@@ -4429,7 +4949,7 @@ namespace MHServerEmu.Games.Entities
             sb.AppendLine($"{nameof(_accountCreationTimestamp)}: {Clock.UnixTimeToDateTime(_accountCreationTimestamp)}");
             sb.AppendLine($"{nameof(_partyId)}: {_partyId}");
 
-            if (_guildId != GuildMember.InvalidGuildId)
+            if (_guildId != GuildManager.InvalidGuildId)
             {
                 sb.AppendLine($"{nameof(_guildId)}: {_guildId}");
                 sb.AppendLine($"{nameof(_guildName)}: {_guildName}");

@@ -6,8 +6,6 @@ The only currently supported version of the game client is **1.52.0.1700** (also
 
 We post development progress reports on our [blog](https://crypto137.github.io/MHServerEmu/). You can find additional information on various topics in the [documentation](./docs/Index.md). If you would like to discuss this project and/or help with its development, feel free to join our [Discord](https://discord.gg/hjR8Bj52t3).
 
-**Please make sure to read our [contribution guidelines](./CONTRIBUTING.md) if you would like to participate in the development of this project.**
-
 ## Download
 
 We provide two kinds of builds: stable and nightly.
@@ -32,25 +30,13 @@ You can always upgrade from stable to nightly simply by downloading the latest n
 
 [![Nightly Release (Windows x64)](https://github.com/Crypto137/MHServerEmu/actions/workflows/nightly-release-windows-x64.yml/badge.svg)](https://nightly.link/Crypto137/MHServerEmu/workflows/nightly-release-windows-x64/master?preview) [![Nightly Release (Linux x64)](https://github.com/Crypto137/MHServerEmu/actions/workflows/nightly-release-linux-x64.yml/badge.svg)](https://nightly.link/Crypto137/MHServerEmu/workflows/nightly-release-linux-x64/master?preview)
 
-## Features
-
-MHServerEmu is feature-complete as a single player experience, and we are actively working on getting the remaining multiplayer features up and running:
-
-- Store Gifting
-
-- Supergroups
-
-- Matchmaking
-
-- PvP
-
-- Trade Window
-
-You can find up to date information on what we are working on in [our roadmap](https://github.com/users/Crypto137/projects/5).
-
 ## FAQ
 
-**Where can I download the game?**
+**Is the game fully playable?**
+
+All systems and content that were in the game when it was shut down in 2017 have been restored.
+
+**Where can I download the game client?**
 
 We do not provide download links for the game client for legal reasons. If you have played the game through Steam when it was live, you should be able to download it in your Steam library.
 
@@ -58,13 +44,11 @@ We do not provide download links for the game client for legal reasons. If you h
 
 Download the latest stable or nightly build and overwrite your existing files. Nightly builds can be potentially unstable, so it is recommended to back up your account database file located in `MHServerEmu\Data\Account.db` before updating.
 
-**Will there be any wipes?**
-
-We plan to force a fresh start when version 1.0 comes out in early 2026. Your data will not be deleted, but it will no longer be compatible with the server. You will be able to continue using your existing data on whatever the last 0.x version is going to be.
-
 **Are you going to support other versions of the game, like the ones from before the Biggest Update Ever (BUE) came out?**
 
-Yes, we do plan to implement support for other versions of the game after 1.52 is fully restored. The final pre-BUE version (1.48) has the highest priority.
+Yes, we do plan to implement support for other versions, including the final pre-BUE version (1.48) from late 2016. Currently there are no timeframes for when this is going to happen. The current work-in-progress 1.48 code is available on the [v48](https://github.com/Crypto137/MHServerEmu/tree/v48) branch.
+
+Some early work has also been done to support version 1.10 from mid 2013. You can find the code for it in the [MHServerEmu2013](https://github.com/Crypto137/MHServerEmu2013) repository.
 
 **Are you going to add new content to the game (heroes, team-ups, powers, etc.)?**
 

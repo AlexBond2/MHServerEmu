@@ -41,15 +41,29 @@ Setting the server up for connections outside of your local network requires the
 
 ## Managing Accounts
 
-You can create and manage accounts by using ! commands in the server console or the in-game chat window. Here are some commands to get you started:
+You can create and manage accounts by using `!` commands in the server console or the in-game chat window. Here are some commands to get you started:
 
 - `!account create [email] [playerName] [password]` - creates a new account with the specified email, player name, and password. Email and player name must be unique for each account.
 
-- `!account userlevel [0|1|2]` - sets user level for the specified account to user (0), moderator (1), or admin (2). Higher user levels enable additional in-game command privileges, up to being able to manage other accounts and shut down the server.
+- `!account userlevel [email] [0|1|2]` - sets user level for the specified account to user (0), moderator (1), or admin (2). Higher user levels enable additional in-game command privileges, up to being able to manage other accounts and shut down the server.
 
 - `!account password [email] [newPassword]` - changes password for the specified account.
 
 For a more in-depth list of commands see [Server Commands](./../ServerEmu/ServerCommands.md) or type `!commands`.
+
+## Enabling Server Garbage Collection
+
+When hosting a server for larger player counts (50+), it is recommended to enable .NET's server garbage collection mode.
+
+The easiest way to enable it for MHServerEmu is to modify the `MHServerEmu.runtimeconfig.json` file located next to `MHServerEmu.exe`:
+
+1. Open `MHServerEmu.runtimeconfig.json` with a text editor.
+
+2. Add the following line to the `configProperties` section: `"System.GC.Server": true`.
+
+Please keep in mind that the server garbage collection mode tends to follow the "any RAM not used is RAM wasted" approach, which can result in very heavy RAM usage, especially when the server stays up for longer periods of time. You may want to limit memory usage by adding the following line to the same `configProperties` section of `MHServerEmu.runtimeconfig.json`: `"System.GC.HeapHardLimitPercent": 80` (this will limit usage to 80% of available RAM).
+
+You can find out more about the differences between the workstation (default) and the server modes in the [.NET documentation](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/workstation-server-gc).
 
 ## Setting Up Live Tips
 

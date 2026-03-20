@@ -32,7 +32,7 @@ namespace MHServerEmu.Games.Entities
             Violet = 18337403507337860830, // MagnetoMetalOrb = 18337403507337860830,
         }
 
-        public static Agent CrateOrb(TestOrb orbProto, Vector3 position, Region region)
+        public static Agent CreateOrb(TestOrb orbProto, Vector3 position, Region region)
         {
             if (DebugOrb == false) return null;
 
@@ -86,7 +86,7 @@ namespace MHServerEmu.Games.Entities
             Bounds entityBounds = new();
             entityBounds.InitializeFromPrototype(entityBoundsPrototype);
             entityBounds.Center = avatar.RegionLocation.Position + avatar.Forward * 120;
-            return region.ChoosePositionAtOrNearPoint(entityBounds, avatar.Locomotor.PathFlags, PositionCheckFlags.CanBeBlockedEntity, BlockingCheckFlags.None, maxDistance, out spawnPositionResult, maxPositionTests: 32);
+            return region.ChoosePositionAtOrNearPoint(ref entityBounds, avatar.Locomotor.PathFlags, PositionCheckFlags.CanBeBlockedEntity, BlockingCheckFlags.None, maxDistance, out spawnPositionResult, maxPositionTests: 32);
         }
     }
 }

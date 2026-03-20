@@ -230,22 +230,16 @@ namespace MHServerEmu.Games.GameData.Prototypes
         {
             if (RecipeInputs.IsNullOrEmpty()) return Logger.WarnReturn(CraftingResult.CraftingFailed, "ValidateIngredients(): RecipeInputs.IsNullOrEmpty()");
 
-            Dictionary<ulong, int> usedStackCounts = DictionaryPool<ulong, int>.Instance.Get();
-            try
-            {
-                for (int slot = 0; slot < RecipeInputs.Length; slot++)
-                {
-                    CraftingResult slotResult = ValidateIngredient(player, ingredientIds, slot, usedStackCounts);
-                    if (slotResult != CraftingResult.Success)
-                        return slotResult;
-                }
+            using var usedStackCountsHandle = DictionaryPool<ulong, int>.Instance.Get(out Dictionary<ulong, int> usedStackCounts);
 
-                return CraftingResult.Success;
-            }
-            finally
+            for (int slot = 0; slot < RecipeInputs.Length; slot++)
             {
-                DictionaryPool<ulong, int>.Instance.Return(usedStackCounts);
+                CraftingResult slotResult = ValidateIngredient(player, ingredientIds, slot, usedStackCounts);
+                if (slotResult != CraftingResult.Success)
+                    return slotResult;
             }
+
+            return CraftingResult.Success;
         }
 
         public CraftingResult ValidateIngredient(Player player, List<ulong> ingredientIds, int slot, Dictionary<ulong, int> usedStackCounts)
@@ -334,9 +328,8 @@ namespace MHServerEmu.Games.GameData.Prototypes
             CraftingResult result = inputProtoToUse.AllowItem(ingredientSpec, avatar);
             if (result == CraftingResult.Success && autoPopulatedIngredientProto == null && usedStackCounts != null)
             {
-                usedStackCounts.TryGetValue(ingredientId, out int count);
-                usedStackCounts[ingredientId] = ++count;
-                if (count > ingredientSpec.StackCount)
+                ref int count = ref usedStackCounts.GetValueRefOrAddDefault(ingredientId);
+                if (++count > ingredientSpec.StackCount)
                     return CraftingResult.InsufficientIngredients;
             }
 
