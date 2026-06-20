@@ -104,7 +104,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 ValueType.Integer => new SimpleValue<int>(jsonElement.GetInt32(), valueType),
                 ValueType.Enum => new SimpleValue<string>(jsonElement.GetString(), valueType),
                 ValueType.PrototypeGuid => new SimpleValue<PrototypeGuid>((PrototypeGuid)jsonElement.GetUInt64(), valueType),
-                ValueType.PrototypeId or 
+                ValueType.PrototypeId or
                 ValueType.PrototypeDataRef => new SimpleValue<PrototypeId>((PrototypeId)jsonElement.GetUInt64(), valueType),
                 ValueType.LocaleStringId => new SimpleValue<LocaleStringId>((LocaleStringId)jsonElement.GetUInt64(), valueType),
                 ValueType.PrototypeIdArray or
@@ -112,9 +112,22 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 ValueType.Prototype => new SimpleValue<Prototype>(ParseJsonPrototype(jsonElement), valueType),
                 ValueType.PrototypeArray => new ArrayValue<Prototype>(jsonElement, valueType, ParseJsonPrototype),
                 ValueType.Vector3 => new SimpleValue<Vector3>(ParseJsonVector3(jsonElement), valueType),
+                ValueType.Orientation => new SimpleValue<Orientation>(ParseJsonOrientation(jsonElement), valueType),
                 ValueType.Properties => new SimpleValue<PropertyCollection>(ParseJsonProperties(jsonElement), valueType),
                 _ => throw new NotSupportedException($"Type {valueType} not support.")
             };
+        }
+
+        private static Orientation ParseJsonOrientation(JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Json element is not array");
+
+            var jsonArray = jsonElement.EnumerateArray().ToArray();
+            if (jsonArray.Length != 3)
+                throw new InvalidOperationException("Json element is not Orientation");
+
+            return new Orientation(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
         }
 
         private static Vector3 ParseJsonVector3(JsonElement jsonElement)
@@ -123,7 +136,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 throw new InvalidOperationException("Json element is not array");
 
             var jsonArray = jsonElement.EnumerateArray().ToArray();
-            if (jsonArray.Length != 3) 
+            if (jsonArray.Length != 3)
                 throw new InvalidOperationException("Json element is not Vector3");
 
             return new Vector3(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
@@ -163,7 +176,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
         public static PropertyCollection ParseJsonProperties(JsonElement jsonElement)
         {
-            PropertyCollection properties = new ();
+            PropertyCollection properties = new();
             var infoTable = GameDatabase.PropertyInfoTable;
 
             foreach (var property in jsonElement.EnumerateObject())
@@ -306,7 +319,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
         public override void Write(Utf8JsonWriter writer, PrototypePatchEntry value, JsonSerializerOptions options)
         {
-            throw new NotImplementedException(); 
+            throw new NotImplementedException();
         }
     }
 
@@ -326,6 +339,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
         Prototype,
         PrototypeArray,
         Vector3,
+        Orientation,
         Properties
     }
 
