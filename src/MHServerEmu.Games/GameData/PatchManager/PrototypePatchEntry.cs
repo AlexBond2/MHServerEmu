@@ -152,6 +152,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 ValueType.PrototypeDataRef => new SimpleValue<PrototypeId>(ParsePrototypeRef(jsonElement), valueType),
                 ValueType.LocaleStringId => new SimpleValue<LocaleStringId>((LocaleStringId)jsonElement.GetUInt64(), valueType),
                 ValueType.Vector3 => new SimpleValue<Vector3>(ParseJsonVector3(jsonElement), valueType),
+                ValueType.Orientation => new SimpleValue<Orientation>(ParseJsonOrientation(jsonElement), valueType),
                 ValueType.PropertyId => new SimpleValue<PropertyId>(ParseJsonPropertyIdSingle(jsonElement), valueType),
                 // Kept as a detached copy: the JsonDocument this element belongs to is disposed once parsing
                 // finishes, and reading a JsonElement after that throws.
@@ -182,6 +183,18 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
                 _ => throw new NotSupportedException($"Type {valueType} not support.")
             };
+        }
+
+        private static Orientation ParseJsonOrientation(JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Json element is not array");
+
+            var jsonArray = jsonElement.EnumerateArray().ToArray();
+            if (jsonArray.Length != 3)
+                throw new InvalidOperationException("Json element is not Orientation");
+
+            return new Orientation(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
         }
 
         private static Vector3 ParseJsonVector3(JsonElement jsonElement)
@@ -681,6 +694,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
         LocaleStringId,
         PrototypeDataRef,
         Vector3,
+        Orientation,
         PropertyId,
         RawJson,
 
