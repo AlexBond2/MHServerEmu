@@ -1,4 +1,5 @@
-﻿using MHServerEmu.Core.Logging;
+﻿using MHServerEmu.Core.Helpers;
+using MHServerEmu.Core.Logging;
 using MHServerEmu.Games.GameData.Calligraphy;
 using MHServerEmu.Games.GameData.Prototypes;
 using System.Text.Json;
@@ -9,7 +10,8 @@ namespace MHServerEmu.Games.GameData.PatchManager
     {
         private static readonly Logger Logger = LogManager.CreateLogger();
 
-        private readonly PrototypeId _parentRef;
+        private readonly PrototypeId _parentRef = PrototypeId.Invalid;
+        private readonly Type _classType;
         private readonly List<Field> _fields = new();
 
         private Prototype _instance;
@@ -18,19 +20,28 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
         public JsonPrototype(JsonElement jsonElement)
         {
-            _parentRef = (PrototypeId)jsonElement.GetProperty("ParentDataRef").GetUInt64();
+            if (jsonElement.TryGetProperty("ParentDataRef", out JsonElement parentRefElem))
+            {
+                _parentRef = (PrototypeId)parentRefElem.GetUInt64();
+                _classType = GameDatabase.DataDirectory.GetPrototypeClassType(_parentRef);
+            }
+            else if (jsonElement.TryGetProperty("ProtoNameHash", out JsonElement protoHashElem))
+            {
+                string className = protoHashElem.GetString();
+                uint hash = HashHelper.Djb2(className);
+                _classType = GameDatabase.PrototypeClassManager.GetPrototypeClassTypeByNameHash(hash);
+            }
 
-            Type classType = GameDatabase.DataDirectory.GetPrototypeClassType(_parentRef);
-            if (!Verify.IsNotNull(classType)) return;
+            if (!Verify.IsNotNull(_classType)) return;
 
             foreach (JsonProperty jsonProperty in jsonElement.EnumerateObject())
             {
                 string fieldName = jsonProperty.Name;
 
-                if (fieldName == "ParentDataRef")
+                if (fieldName == "ParentDataRef" || fieldName == "ProtoNameHash")
                     continue;
 
-                System.Reflection.PropertyInfo fieldInfo = classType.GetProperty(fieldName);
+                System.Reflection.PropertyInfo fieldInfo = _classType.GetProperty(fieldName);
                 if (!Verify.IsNotNull(fieldInfo))
                     continue;
 
@@ -44,21 +55,19 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
         public override object GetValue()
         {
-            if (!Verify.IsTrue(_parentRef != PrototypeId.Invalid)) return null;
-
             if (_instance == null)
             {
-                Type classType = GameDatabase.DataDirectory.GetPrototypeClassType(_parentRef);
-                if (!Verify.IsNotNull(classType)) return null;
+                if (!Verify.IsNotNull(_classType)) return null;
 
-                Prototype instance = GameDatabase.PrototypeClassManager.AllocatePrototype(classType);
+                Prototype instance = GameDatabase.PrototypeClassManager.AllocatePrototype(_classType);
                 if (!Verify.IsNotNull(instance)) return null;
 
-                CalligraphySerializer.CopyPrototypeDataRefFields(instance, _parentRef);
+                if (_parentRef != PrototypeId.Invalid)
+                    CalligraphySerializer.CopyPrototypeDataRefFields(instance, _parentRef);
 
                 foreach (Field field in _fields)
                 {
-                    System.Reflection.PropertyInfo fieldInfo = classType.GetProperty(field.Name);
+                    System.Reflection.PropertyInfo fieldInfo = _classType.GetProperty(field.Name);
                     if (!Verify.IsNotNull(fieldInfo))
                         continue;
 
@@ -69,7 +78,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
                     }
                     catch (Exception e)
                     {
-                        Logger.Warn($"Can't convert {field.Name} in {classType.Name} - {e.Message}");
+                        Logger.Warn($"Can't convert {field.Name} in {_classType.Name} - {e.Message}");
                     }
                 }
 

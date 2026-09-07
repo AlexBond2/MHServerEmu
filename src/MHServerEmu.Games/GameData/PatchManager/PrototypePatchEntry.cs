@@ -101,6 +101,8 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 ValueType.Float => new SimpleValue<float>(jsonElement.GetSingle(), valueType),
                 ValueType.Integer => new SimpleValue<int>(jsonElement.GetInt32(), valueType),
                 ValueType.Enum => new SimpleValue<string>(jsonElement.GetString(), valueType),
+                ValueType.Asset or
+                ValueType.AssetId => new SimpleValue<AssetId>((AssetId)jsonElement.GetUInt64(), valueType),
                 ValueType.PrototypeGuid => new SimpleValue<PrototypeGuid>((PrototypeGuid)jsonElement.GetUInt64(), valueType),
                 ValueType.PrototypeId or 
                 ValueType.PrototypeDataRef => new SimpleValue<PrototypeId>((PrototypeId)jsonElement.GetUInt64(), valueType),
@@ -262,6 +264,16 @@ namespace MHServerEmu.Games.GameData.PatchManager
                     return (LocaleStringId)ulongValue;
             }
 
+            if (fieldType == typeof(Vector3))
+            {
+                return ParseJsonVector3(value);
+            }
+
+            if (fieldType == typeof(Orientation))
+            {
+                return ParseJsonOrientation(value);
+            }
+
             switch (value.ValueKind)
             {
                 case JsonValueKind.String:
@@ -296,6 +308,8 @@ namespace MHServerEmu.Games.GameData.PatchManager
         Float,
         Integer,
         Enum,
+        Asset,
+        AssetId,
         PrototypeGuid,
         PrototypeId,
         PrototypeIdArray,
