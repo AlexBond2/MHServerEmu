@@ -646,6 +646,16 @@ namespace MHServerEmu.Games.GameData.PatchManager
                     return (LocaleStringId)ulongValue;
             }
 
+            if (fieldType == typeof(Vector3))
+            {
+                return ParseJsonVector3(value);
+            }
+
+            if (fieldType == typeof(Orientation))
+            {
+                return ParseJsonOrientation(value);
+            }
+
             switch (value.ValueKind)
             {
                 case JsonValueKind.String:

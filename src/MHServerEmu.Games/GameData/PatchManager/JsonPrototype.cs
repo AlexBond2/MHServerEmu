@@ -1,4 +1,5 @@
-﻿using MHServerEmu.Core.Logging;
+﻿using MHServerEmu.Core.Helpers;
+using MHServerEmu.Core.Logging;
 using MHServerEmu.Games.GameData.Calligraphy;
 using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Properties;
@@ -13,6 +14,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
         private readonly PrototypeId _parentRef;
         private readonly Type _classType;
         private readonly ValueType _valueType;
+
         private readonly List<Field> _fields = new();
 
         private Prototype _instance;
@@ -44,6 +46,12 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 _parentRef = PatchEntryConverter.ParsePrototypeRefPublic(parentRefElement);
                 _classType = GameDatabase.DataDirectory.GetPrototypeClassType(_parentRef);
             }
+            else if (jsonElement.TryGetProperty("ProtoNameHash", out JsonElement protoHashElem))
+            {
+                string className = protoHashElem.GetString();
+                uint hash = HashHelper.Djb2(className);
+                _classType = GameDatabase.PrototypeClassManager.GetPrototypeClassTypeByNameHash(hash);
+            }
             else if (jsonElement.TryGetProperty("ClassName", out JsonElement classNameElement))
             {
                 _parentRef = PrototypeId.Invalid;
@@ -58,8 +66,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 return;
             }
 
-            Type classType = _classType;
-            if (!Verify.IsNotNull(classType)) return;
+            if (!Verify.IsNotNull(_classType)) return;
 
             foreach (JsonProperty jsonProperty in jsonElement.EnumerateObject())
             {
@@ -71,10 +78,10 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 // PrototypePatchEntry has its own top-level Description. Skip these silently rather than
                 // failing the GetProperty() lookup below and logging a Verify warning for something that's
                 // working as intended.
-                if (fieldName == "ParentDataRef" || fieldName == "ClassName" || fieldName == "Description")
+                if (fieldName == "ParentDataRef" || fieldName == "ProtoNameHash" || fieldName == "ClassName" || fieldName == "Description")
                     continue;
 
-                System.Reflection.PropertyInfo fieldInfo = classType.GetProperty(fieldName);
+                System.Reflection.PropertyInfo fieldInfo = _classType.GetProperty(fieldName);
                 if (!Verify.IsNotNull(fieldInfo))
                     continue;
 
@@ -157,9 +164,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
             if (_instance == null)
             {
-                Type classType = _classType;
-
-                Prototype instance = GameDatabase.PrototypeClassManager.AllocatePrototype(classType);
+                Prototype instance = GameDatabase.PrototypeClassManager.AllocatePrototype(_classType);
                 if (!Verify.IsNotNull(instance)) return null;
 
                 // Only a ParentDataRef-based value has a donor to inherit from. A ClassName-based one is a
@@ -172,7 +177,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
                 foreach (Field field in _fields)
                 {
-                    System.Reflection.PropertyInfo fieldInfo = classType.GetProperty(field.Name);
+                    System.Reflection.PropertyInfo fieldInfo = _classType.GetProperty(field.Name);
                     if (!Verify.IsNotNull(fieldInfo))
                         continue;
 
@@ -202,13 +207,13 @@ namespace MHServerEmu.Games.GameData.PatchManager
                         // without a single error (upstream merge 34df4088b, 2026-07-30). Log it loudly so it
                         // is caught in minutes rather than by noticing loot has quietly gone missing.
                         if (field.Type.IsArray)
-                            Logger.Error($"Can't convert ARRAY field {field.Name} in {classType.Name} - {e.Message}. " +
+                            Logger.Error($"Can't convert ARRAY field {field.Name} in {_classType.Name} - {e.Message}. " +
                                          $"Nested array support has regressed - see JsonPrototype.ParseArrayField().");
                         else if (typeof(Prototype).IsAssignableFrom(field.Type))
-                            Logger.Error($"Can't convert NESTED PROTOTYPE field {field.Name} in {classType.Name} - {e.Message}. " +
+                            Logger.Error($"Can't convert NESTED PROTOTYPE field {field.Name} in {_classType.Name} - {e.Message}. " +
                                          $"Nested object support has regressed - see the JsonValueKind.Object case in the constructor.");
                         else
-                            Logger.Warn($"Can't convert {field.Name} in {classType.Name} - {e.Message}");
+                            Logger.Warn($"Can't convert {field.Name} in {_classType.Name} - {e.Message}");
                     }
                 }
 
