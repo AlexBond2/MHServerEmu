@@ -110,9 +110,22 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 ValueType.Prototype => new JsonPrototype(jsonElement),
                 ValueType.PrototypeArray => new JsonPrototypeArray(jsonElement),
                 ValueType.Vector3 => new SimpleValue<Vector3>(ParseJsonVector3(jsonElement), valueType),
+                ValueType.Orientation => new SimpleValue<Orientation>(ParseJsonOrientation(jsonElement), valueType),
                 ValueType.Properties => new SimpleValue<PropertyCollection>(ParseJsonProperties(jsonElement), valueType),
                 _ => throw new NotSupportedException($"Type {valueType} not support.")
             };
+        }
+
+        private static Orientation ParseJsonOrientation(JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Json element is not array");
+
+            var jsonArray = jsonElement.EnumerateArray().ToArray();
+            if (jsonArray.Length != 3)
+                throw new InvalidOperationException("Json element is not Orientation");
+
+            return new Orientation(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
         }
 
         private static Vector3 ParseJsonVector3(JsonElement jsonElement)
@@ -292,6 +305,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
         Prototype,
         PrototypeArray,
         Vector3,
+        Orientation,
         Properties
     }
 
