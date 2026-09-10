@@ -133,5 +133,16 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
             return _instances;
         }
+
+        public object GetTypedPrototypes(Type protoType)
+        {
+            var instances = (Prototype[])GetValue(); 
+            if (instances == null) return null;
+            var newArray = Array.CreateInstance(protoType, instances.Length);
+            for (int i = 0; i < instances.Length; i++)
+                newArray.SetValue(instances[i], i);
+
+            return newArray;
+        }
     }
 }

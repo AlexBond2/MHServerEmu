@@ -163,6 +163,13 @@ namespace MHServerEmu.Games.GameData.PatchManager
             if (targetType.IsInstanceOfType(rawValue))
                 return rawValue;
 
+            if (targetType.IsArray)
+            {
+                Type elementType = targetType.GetElementType();
+                if (rawValue is JsonPrototypeArray jsonArray)
+                    return jsonArray.GetTypedPrototypes(elementType);
+            }
+
             if (targetType.IsSubclassOf(typeof(Prototype)))
             {
                 PrototypeId? protoRef = null;

@@ -1,5 +1,6 @@
 ﻿using MHServerEmu.Core.Logging;
 using MHServerEmu.Core.VectorMath;
+using MHServerEmu.Games.GameData.Prototypes;
 using MHServerEmu.Games.Properties;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -272,6 +273,14 @@ namespace MHServerEmu.Games.GameData.PatchManager
             if (fieldType == typeof(Orientation))
             {
                 return ParseJsonOrientation(value);
+            }
+
+            if (value.ValueKind == JsonValueKind.Array)
+            {
+                if (fieldType == typeof(Prototype) || fieldType.IsArray)
+                {
+                    return new JsonPrototypeArray(value);
+                }
             }
 
             switch (value.ValueKind)
