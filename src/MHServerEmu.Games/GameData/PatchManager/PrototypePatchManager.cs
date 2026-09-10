@@ -425,33 +425,42 @@ namespace MHServerEmu.Games.GameData.PatchManager
             }
 
             // Handle array types - convert to correct element type if needed
-            if (targetType.IsArray && rawValue.GetType().IsArray)
+            if (targetType.IsArray)
             {
-                Type targetElementType = targetType.GetElementType();
-                Type sourceElementType = rawValue.GetType().GetElementType();
-
-                // If element types are compatible, create new array with correct type
-                if (targetElementType != sourceElementType &&
-                    (targetElementType.IsAssignableFrom(sourceElementType) || sourceElementType.IsAssignableFrom(targetElementType)))
+                if (rawValue is JsonPrototypeArray jsonArray)
                 {
-                    Array sourceArray = (Array)rawValue;
-                    Array targetArray = Array.CreateInstance(targetElementType, sourceArray.Length);
-
-                    for (int i = 0; i < sourceArray.Length; i++)
-                    {
-                        object element = sourceArray.GetValue(i);
-                        if (element != null && targetElementType.IsInstanceOfType(element))
-                            targetArray.SetValue(element, i);
-                        else if (element != null)
-                            targetArray.SetValue(ConvertValue(element, targetElementType), i);
-                        else
-                            targetArray.SetValue(null, i);
-                    }
-
-                    return targetArray;
+                    Type elementType = targetType.GetElementType();
+                    return jsonArray.GetTypedPrototypes(elementType);
                 }
 
-                return rawValue;
+                if (rawValue.GetType().IsArray)
+                {
+                    Type targetElementType = targetType.GetElementType();
+                    Type sourceElementType = rawValue.GetType().GetElementType();
+
+                    // If element types are compatible, create new array with correct type
+                    if (targetElementType != sourceElementType &&
+                        (targetElementType.IsAssignableFrom(sourceElementType) || sourceElementType.IsAssignableFrom(targetElementType)))
+                    {
+                        Array sourceArray = (Array)rawValue;
+                        Array targetArray = Array.CreateInstance(targetElementType, sourceArray.Length);
+
+                        for (int i = 0; i < sourceArray.Length; i++)
+                        {
+                            object element = sourceArray.GetValue(i);
+                            if (element != null && targetElementType.IsInstanceOfType(element))
+                                targetArray.SetValue(element, i);
+                            else if (element != null)
+                                targetArray.SetValue(ConvertValue(element, targetElementType), i);
+                            else
+                                targetArray.SetValue(null, i);
+                        }
+
+                        return targetArray;
+                    }
+
+                    return rawValue;
+                }
             }
 
             if (typeof(Prototype).IsAssignableFrom(targetType))
@@ -486,6 +495,8 @@ namespace MHServerEmu.Games.GameData.PatchManager
             // dedicated "Orientation" ValueType in patch data - JSON authors reuse ValueType:Vector3 for it
             // (same 3-float array shape), which used to fail here since Vector3 doesn't implement
             // IConvertible and there's no TypeConverter between the two distinct structs.
+
+            // TODO: Remove this absolute bio-hazard once all district JSONs use ValueType.Orientation
             if (targetType == typeof(Orientation) && rawValue is Vector3 vec)
                 return new Orientation(vec.X, vec.Y, vec.Z);
 
