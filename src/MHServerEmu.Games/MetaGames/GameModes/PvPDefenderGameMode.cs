@@ -606,10 +606,11 @@ namespace MHServerEmu.Games.MetaGames.GameModes
                 var target = entity as WorldEntity;
                 if (target.PrototypeDataRef != startTarget.Entity) continue;
 
+                /* startTarget is Unique for Region
                 var targetCell = GameDatabase.GetDataRefByAsset(startTarget.Cell);
                 if (target.Cell.PrototypeDataRef != targetCell) continue;
 
-                if (target.Area.PrototypeDataRef != startTarget.Area) continue;
+                if (target.Area.PrototypeDataRef != startTarget.Area) continue;*/
 
                 return target;
             }
