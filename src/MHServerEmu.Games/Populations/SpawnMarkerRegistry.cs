@@ -96,6 +96,9 @@ namespace MHServerEmu.Games.Populations
         public void AddCell(Cell cell)
         {
             int id = 0;
+
+            AddDistrictMarkers(cell, ref id);
+
             CellPrototype cellProto = cell.Prototype;
             foreach (var marker in cellProto.MarkerSet.Markers)
             {
@@ -120,6 +123,40 @@ namespace MHServerEmu.Games.Populations
 
                         //Logger.Debug($"Marker [{GameDatabase.GetFormattedPrototypeName(markerRef)}] {regionPos}");
                         AddSpawnTypeLocation(markerRef, marker.Position, marker.Rotation, cell, ++id);
+                    }
+                }
+            }
+        }
+
+        private void AddDistrictMarkers(Cell cell, ref int id)
+        {
+            var districtRef = cell.Area.DistrictDataRef;
+            if (districtRef == PrototypeId.Invalid) return;
+
+            var districtProto = GameDatabase.GetPrototype<DistrictPrototype>(districtRef);
+            if (districtProto?.MarkerSet?.Markers == null) return;
+
+            foreach (var marker in districtProto.MarkerSet.Markers)
+            {
+                if (marker is not EntityMarkerPrototype entityMarker) continue;
+
+                SpawnMarkerPrototype spawnMarker = entityMarker.GetMarkedPrototype<SpawnMarkerPrototype>();
+                if (spawnMarker != null && spawnMarker.Type != MarkerType.Prop)
+                {
+                    var filterRef = GameDatabase.GetDataRefByPrototypeGuid(entityMarker.FilterGuid);
+                    if (cell.Region.CheckMarkerFilter(filterRef))
+                    {
+                        if (entityMarker.EntityGuid == 0) continue;
+                        var markerRef = GameDatabase.GetDataRefByPrototypeGuid(entityMarker.EntityGuid);
+                        if (markerRef == PrototypeId.Invalid) continue;
+
+                        Vector3 regionPos = entityMarker.Position;
+
+                        if (cell.RegionBounds.IntersectsXY(regionPos))
+                        {
+                            Vector3 cellPos = regionPos - cell.RegionBounds.Center + cell.Prototype.BoundingBox.Center;
+                            AddSpawnTypeLocation(markerRef, cellPos, marker.Rotation, cell, ++id);
+                        }
                     }
                 }
             }

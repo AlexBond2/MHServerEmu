@@ -15,7 +15,8 @@ namespace MHServerEmu.Games.Populations
         NoOffset = 1,
         Default = 2,
         SpawnMissionAssociated = 4,
-        NoSpawnMissionAssociated = 8
+        NoSpawnMissionAssociated = 8,
+        District = 16
     }
 
     public class PropSpawnVisitor

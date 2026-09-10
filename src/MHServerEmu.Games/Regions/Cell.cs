@@ -453,7 +453,7 @@ namespace MHServerEmu.Games.Regions
 
             if (options.HasFlag(MarkerSetOptions.NoOffset))
                 markerTransform = RegionTransform * markerTransform;
-            else
+            else if(!options.HasFlag(MarkerSetOptions.District))
                 markerTransform = Transform3.BuildTransform(AreaOffset, Orientation.Zero) * markerTransform;
 
             markerPosition = markerTransform.Translation;
@@ -627,8 +627,8 @@ namespace MHServerEmu.Games.Regions
             if (districtRef != PrototypeId.Invalid)
             {
                 var districtProto = GameDatabase.GetPrototype<DistrictPrototype>(districtRef);
-                if (districtProto != null)
-                    InstanceMarkerSet(districtProto.MarkerSet, Transform3.Identity(), MarkerSetOptions.None);
+                if (districtProto != null && options.HasFlag(MarkerSetOptions.SpawnMissionAssociated))
+                    InstanceMarkerSet(districtProto.MarkerSet, Transform3.Identity(), MarkerSetOptions.District);
             }
 
             InstanceMarkerSet(cellProto.MarkerSet, Transform3.Identity(), options);
