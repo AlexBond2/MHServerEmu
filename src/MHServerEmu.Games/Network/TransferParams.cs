@@ -126,6 +126,20 @@ namespace MHServerEmu.Games.Network
             PrototypeId entityProtoRef = targetProto.Entity;
 
             bool found = region.FindTargetLocation(ref position, ref orientation, areaProtoRef, cellProtoRef, entityProtoRef);
+
+            if (!found) // Force found EntityTarget for District entity
+                foreach (var entity in region.Entities)
+                {
+                    if (entity is not WorldEntity worldEntity) continue;
+                    if (worldEntity.PrototypeDataRef == entityProtoRef)
+                    {
+                        position = worldEntity.RegionLocation.Position;
+                        orientation = worldEntity.RegionLocation.Orientation;
+                        found = true;
+                        break;
+                    }
+                }
+
             if (!Verify.IsTrue(found, $"Failed to find location for target {targetProto}"))
                 return false;
 
