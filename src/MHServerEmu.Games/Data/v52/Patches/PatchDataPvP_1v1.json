@@ -1,0 +1,283 @@
+﻿[
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/NexusPvP/Regions/NexusPvPRegion.prototype",
+    "Path": "MetaGames[0]",
+    "Description": "Change Mode to DefenderPvPTier1",
+    "ValueType": "PrototypeId",
+    "Value": 15802071050472854237
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/NexusPvP/Regions/NexusPvPRegion.prototype",
+    "Path": "RegionQueueMethod",
+    "Description": "Change QueueMethod to PvPQueue",
+    "ValueType": "Enum",
+    "Value": "PvPQueue"
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/NexusPvP/Regions/NexusPvPRegion.prototype",
+    "Path": "DifficultySettings",
+    "Description": "Change DifficultySettings to Difficulty/PvP.prototype",
+    "ValueType": "Prototype",
+    "Value": {
+		"ParentDataRef": 16469196263734122259,
+		"TuningTable": 15108771445511096812
+	}
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/DefenderPvPTier1.prototype",
+    "Path": "StartRegion",
+    "Description": "Change StartRegion to NexusPvPRegion",
+    "ValueType": "PrototypeId",
+    "Value": 8564410078179431565
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/Modes/MainTier1.prototype",
+    "Path": "Turrets[0].TurretPopulation.UsePopulationMarker",
+    "Description": "Change Turret0 marker to EncounterTinyV20",
+    "ValueType": "PrototypeId",
+    "Value": 15203710912369005139
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/Modes/MainTier1.prototype",
+    "Path": "Turrets[1].TurretPopulation.UsePopulationMarker",
+    "Description": "Change Turret1 marker to EncounterTinyV20",
+    "ValueType": "PrototypeId",
+    "Value": 15203710912369005139
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/Modes/MainTier1.prototype",
+    "Path": "AttackerWaveCycleMS",
+    "Description": "Change AttackerWaveCycleMS",
+    "ValueType": "Integer",
+    "Value": 20000
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/ConnectionTargets/Tiered/LeftBaseTier1EntryTarget.prototype",
+    "Path": "Region",
+    "Description": "Change Region to NexusPvPRegion",
+    "ValueType": "PrototypeId",
+    "Value": 8564410078179431565
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/DefenderPvP/ConnectionTargets/Tiered/RightBaseTier1EntryTarget.prototype",
+    "Path": "Region",
+    "Description": "Change Region to NexusPvPRegion",
+    "ValueType": "PrototypeId",
+    "Value": 8564410078179431565
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Metagame/NexusPvP/Regions/NexusPvPArea.prototype",
+    "Path": "Generator.District",
+    "Description": "Change District to PvP_Arena_A",
+    "ValueType": "AssetId",
+    "Value": 13925129863776310016
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Resource/Districts/PvP/PvP_Arena_A.district",
+    "Path": "CellMarkerSet.Markers[0].Resource",
+    "Description": "Staging PvP Cell",
+    "ValueType": "String",
+    "Value": "Resource/Cells/DistrictCells/PvP_1v1_Jungle/PvP_Jungle_A_Staging_C.cell"
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Resource/Districts/PvP/PvP_Arena_A.district",
+    "Path": "CellMarkerSet.Markers[]",
+    "Description": "Add Cells",
+    "ValueType": "Prototype[]",
+    "Value": [
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_SW_A.cell",
+        "Position": [ 4096, 4096, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_N_A.cell",
+        "Position": [ 1792, 4096, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_E_A.cell",
+        "Position": [ 4096, 1792, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_FILLER_A.cell",
+        "Position": [ 1792, 6400, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_FILLER_A.cell",
+        "Position": [ 4096, 6400, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_FILLER_A.cell",
+        "Position": [ 6400, 1792, 0 ]
+      },
+      {
+        "ProtoNameHash": "ResourceMarkerPrototype",
+        "Resource": "Resource/Cells/Savagelands/Sauron_Caves_A/Sauron_Caves_A_FILLER_A.cell",
+        "Position": [ 6400, 4096, 0 ]
+      }
+    ]
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Resource/Districts/PvP/PvP_Arena_A.district",
+    "Path": "MarkerSet.Markers[]",
+    "Description": "Add Markers",
+    "ValueType": "Prototype[]",
+    "Value": [
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 12433082201858319704,
+        "LastKnownEntityName": "PvP/Defenders/PvPGuardianRed.prototype",
+        "Position": [ 4067, 2025, 64 ],
+        "Rotation": [ 1.57082, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 513558915519089683,
+        "LastKnownEntityName": "PvP/Fountains/PvPFountainRed.prototype",
+        "Position": [ 4219, 1242, 63 ],
+        "Rotation": [ 1.57082, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 8643481409066765381,
+        "LastKnownEntityName": "SpawnMarkers/Types/EncounterSmallV5.prototype",
+        "Position": [ 3961, 2428, 25 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 172633574242387510,
+        "LastKnownEntityName": "PvP/VendorPvPOffenseLeft.prototype",
+        "Position": [ 4363, 1215, 56 ],
+        "Rotation": [ 1.865349, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 8248320645428677787,
+        "LastKnownEntityName": "PvP/VendorPvPDefenseLeft.prototype",
+        "Position": [ 4219, 1199, 56 ],
+        "Rotation": [ 7.854102, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 3368233682159670008,
+        "LastKnownEntityName": "PvP/VendorPvPUtilityLeft.prototype",
+        "Position": [ 4075, 1215, 56 ],
+        "Rotation": [ 1.276291, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 3958483087298204324,
+        "LastKnownEntityName": "Entity/Transitions/StartNoMesh3.prototype",
+        "Position": [ 4219, 1349, 22 ],
+        "Rotation": [ -4.712461, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 3419739453557641865,
+        "LastKnownEntityName": "SpawnMarkers/Types/EncounterTinyV2.prototype",
+        "Position": [ 4514, 3847, 22 ],
+        "Rotation": [ 3.542705, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 16893238519668026299,
+        "LastKnownEntityName": "PvP/Defenders/PvPGuardianBlue.prototype",
+        "Position": [ 1829, 4440, 28 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 18301105778844439152,
+        "LastKnownEntityName": "PvP/Fountains/PvPFountainBlue.prototype",
+        "Position": [ 1273, 4203, 55 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 15798735039559570142,
+        "LastKnownEntityName": "SpawnMarkers/Types/EncounterSmallV6.prototype",
+        "Position": [ 2200, 4369, 7 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 6697490822081091926,
+        "LastKnownEntityName": "PvP/VendorPvPOffenseRight.prototype",
+        "Position": [ 1237, 4058, 54 ],
+        "Rotation": [ 0.392705, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 6863169453101096885,
+        "LastKnownEntityName": "PvP/VendorPvPDefenseRight.prototyp",
+        "Position": [ 1205, 4202, 54 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 13052157187744278037,
+        "LastKnownEntityName": "PvP/VendorPvPUtilityRight.prototype",
+        "Position": [ 1237, 4346, 54 ],
+        "Rotation": [ -0.392705, 0, 0 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 12613805631507796645,
+        "LastKnownEntityName": "Entity/Transitions/StartNoMesh4.prototype",
+        "Position": [ 1365, 4202, 64 ]
+      },
+      {
+        "ProtoNameHash": "EntityMarkerPrototype",
+        "EntityGuid": 18302880709424854927,
+        "LastKnownEntityName": "SpawnMarkers/Types/EncounterTinyV20.prototype",
+        "Position": [ 3643, 4605, 22 ],
+        "Rotation": [ -1.570796, 0, 0 ]
+      }
+    ]
+  },
+  {
+    "Enabled": true,
+    "Prototype": "Resource/Districts/PvP/PvP_Arena_A.district",
+    "Path": "PathCollection.PathNodeSets[]",
+    "Description": "Add PathNodeSets",
+    "ValueType": "Prototype[]",
+    "Value": [
+      {
+        "ProtoNameHash": "PathNodeSetPrototype",
+        "Group": 1,
+        "PathNodes": [
+          {
+            "ProtoNameHash": "PathNodePrototype",
+            "Position": [ 4061, 2478, 0 ]
+          },
+          {
+            "ProtoNameHash": "PathNodePrototype",
+            "Position": [ 4120, 3631, 0 ]
+          },
+          {
+            "ProtoNameHash": "PathNodePrototype",
+            "Position": [ 3580, 4193, 0 ]
+          },
+          {
+            "ProtoNameHash": "PathNodePrototype",
+            "Position": [ 2419, 4297, 0 ]
+          }
+        ]
+      }
+    ]
+  }
+]

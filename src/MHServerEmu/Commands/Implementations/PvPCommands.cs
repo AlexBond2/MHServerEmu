@@ -48,7 +48,30 @@ namespace MHServerEmu.Commands.Implementations
         [CommandDescription("Join 1v1 PvP queue.")]
         [CommandUsage("pvp 1v1")]
         [CommandInvokerType(CommandInvokerType.Client)]
-        public string Queue1v1(string[] @params, NetClient client) => JoinQueue(1, client);
+        public string Queue1v1(string[] @params, NetClient client)
+        {
+            PlayerConnection playerConnection = (PlayerConnection)client;
+            var player = playerConnection.Player;
+            if (player == null) return "Player not found.";
+
+            if (LiveTuningManager.GetLiveGlobalTuningVar(GlobalTuningVar.eGTV_PVPEnabled) == 0f)
+            {
+                player.SendBannerMessage(GameDatabase.UIGlobalsPrototype.MessagePvPDisabledPortalFail);
+                return string.Empty;
+            }
+
+            bool isInParty = player.Party != null && player.Party.NumMembers > 1;
+            var command = isInParty
+                ? RegionRequestQueueCommandVar.eRRQC_AddToQueueParty
+                : RegionRequestQueueCommandVar.eRRQC_AddToQueueSolo;
+
+            PrototypeId regionRef = GameDatabase.GetPrototypeRefByName("Metagame/NexusPvP/Regions/NexusPvPRegion.prototype");
+
+            if (player.MatchQueueStatus.TryRegionRequestCommand(regionRef, DifficultyRef, 0, command, 1) == false)
+                return "Matchmaking is currently not available.";
+
+            return $"Queued for 1v1 PvP! ({(isInParty ? "Party" : "Solo")})";
+        }
 
         [Command("2v2")]
         [CommandDescription("Join 2v2 PvP queue.")]
