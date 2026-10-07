@@ -14,7 +14,6 @@ namespace MHServerEmu.Games.GameData.PatchManager
         private readonly PrototypeId _parentRef;
         private readonly Type _classType;
         private readonly ValueType _valueType;
-
         private readonly List<Field> _fields = new();
 
         private Prototype _instance;
@@ -50,6 +49,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
             {
                 string className = protoHashElem.GetString();
                 uint hash = HashHelper.Djb2(className);
+                _parentRef = PrototypeId.Invalid;
                 _classType = GameDatabase.PrototypeClassManager.GetPrototypeClassTypeByNameHash(hash);
             }
             else if (jsonElement.TryGetProperty("ClassName", out JsonElement classNameElement))
@@ -62,7 +62,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
             }
             else
             {
-                Logger.Warn("JsonPrototype(): value object needs either a ParentDataRef or a ClassName");
+                Logger.Warn("JsonPrototype(): value object needs either a ParentDataRef, ProtoNameHash or a ClassName");
                 return;
             }
 
@@ -271,7 +271,7 @@ namespace MHServerEmu.Games.GameData.PatchManager
 
         public object GetTypedPrototypes(Type protoType)
         {
-            var instances = (Prototype[])GetValue(); 
+            var instances = (Prototype[])GetValue();
             if (instances == null) return null;
             var newArray = Array.CreateInstance(protoType, instances.Length);
             for (int i = 0; i < instances.Length; i++)

@@ -186,6 +186,18 @@ namespace MHServerEmu.Games.GameData.PatchManager
             };
         }
 
+        private static Vector3 ParseJsonVector3(JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("Json element is not array");
+
+            var jsonArray = jsonElement.EnumerateArray().ToArray();
+            if (jsonArray.Length != 3)
+                throw new InvalidOperationException("Json element is not Vector3");
+
+            return new Vector3(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
+        }
+
         private static Orientation ParseJsonOrientation(JsonElement jsonElement)
         {
             if (jsonElement.ValueKind != JsonValueKind.Array)
@@ -196,18 +208,6 @@ namespace MHServerEmu.Games.GameData.PatchManager
                 throw new InvalidOperationException("Json element is not Orientation");
 
             return new Orientation(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
-        }
-
-        private static Vector3 ParseJsonVector3(JsonElement jsonElement)
-        {
-            if (jsonElement.ValueKind != JsonValueKind.Array)
-                throw new InvalidOperationException("Json element is not array");
-
-            var jsonArray = jsonElement.EnumerateArray().ToArray();
-            if (jsonArray.Length != 3) 
-                throw new InvalidOperationException("Json element is not Vector3");
-
-            return new Vector3(jsonArray[0].GetSingle(), jsonArray[1].GetSingle(), jsonArray[2].GetSingle());
         }
 
         public static PropertyCollection ParseJsonProperties(JsonElement jsonElement)
@@ -808,4 +808,3 @@ namespace MHServerEmu.Games.GameData.PatchManager
         }
     }
 }
-
